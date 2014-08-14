@@ -10,7 +10,7 @@
 
 #include <asio.hpp>
 
-namespace H264 {
+namespace h264 {
 
 const auto startcode = {0,0,1};
 

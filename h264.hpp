@@ -1,35 +1,53 @@
-#ifndef __H264_HPP__
-#define __H264_HPP__
-
 #include <vector>
-#include <stdexcept>
-#include <iterator>
+#include <array>
+#include <cassert>
 #include <algorithm>
+#include <numeric>
+
+#include "utils.hpp"
 #include "bitstream.hpp"
-#include "utils.hpp" 
 
-namespace H264 {
+namespace h264 {
+enum class picture_type { frame, top, bot };
 
-using utils::variant;
+inline bool has_top(picture_type pt) { return pt == picture_type::frame || pt == picture_type::top; }
+inline bool has_bot(picture_type pt) { return pt == picture_type::frame || pt == picture_type::bot; }
 
-enum class PicType { Frame, Top, Bottom};
-
-inline bool has_top(PicType pt) { return pt == PicType::Frame || pt == PicType::Top; }
-inline bool has_bottom(PicType pt) { return pt == PicType::Frame || pt == PicType::Bottom; }
-
-enum class SliceType { P, B, I };
+enum class slice_coding { I, P, B };
 
 inline
-SliceType cast_to_slice_type(std::uint32_t t) {
+slice_coding cast_to_slice_coding(std::uint32_t t) {
   switch(t % 5) {
-  case 0: return SliceType::P;
-  case 1: return SliceType::B;
-  case 2: return SliceType::I;
+  case 0: return slice_coding::P;
+  case 1: return slice_coding::B;
+  case 2: return slice_coding::I;
   default: throw std::runtime_error("Unsupported slice type");
   }
 }
 
-struct SequenceParameterSet {
+enum class ref_type { none, short_term, long_term };
+
+struct memory_management_control_operation {
+  unsigned id;
+  union {
+    struct {
+      union {
+        unsigned difference_of_pic_nums_minus1;
+        unsigned long_term_pic_num;
+      };
+
+      unsigned long_term_frame_idx;
+    };
+    unsigned max_long_term_frame_idx_plus1;
+  };
+};
+
+struct scaling_list {
+  std::uint8_t list4x4[6][16];
+  std::uint8_t list8x8[6][64];
+};
+
+struct sequence_parameter_set {
   unsigned  profile_idc;
   bool      constrained_set0_flag = false;
   bool      constrained_set1_flag = false;
@@ -38,7 +56,7 @@ struct SequenceParameterSet {
   bool      constrained_set4_flag = false;
   bool      constrained_set5_flag = false;
   unsigned  level_idc;
-  unsigned  seq_parameter_set_id;
+  unsigned  seq_parameter_set_id = -1u;
   
   unsigned  chroma_format_idc = 1; //4:2:0 by default
   bool      separate_colour_plane_flag = false;
@@ -78,12 +96,15 @@ struct SequenceParameterSet {
   unsigned  frame_crop_bottom_offset =0;
 };
 
-inline
-std::uint16_t pic_width_in_mbs(SequenceParameterSet const& sps) { return sps.pic_width_in_mbs_minus1 + 1; }
-inline
-std::uint16_t pic_height_in_mbs(SequenceParameterSet const& sps) { return (sps.pic_height_in_map_units_minus1+1)*(sps.frame_mbs_only_flag ? 1 : 2); } 
 
-template<typename Source, std::size_t I> 
+inline
+std::vector<sequence_parameter_set>& add(std::vector<sequence_parameter_set>& spss, sequence_parameter_set&& sps) {
+  spss.resize(std::max(spss.size(), std::size_t(sps.seq_parameter_set_id + 1)));
+  spss[sps.seq_parameter_set_id] = sps;
+  return spss;
+}
+
+template<typename Source, std::size_t I>
 inline
 void parse_scaling_list(Source& a, std::array<uint8_t, I>& list, bool& use_default) {
   std::uint8_t next = 8;
@@ -102,14 +123,14 @@ void parse_scaling_list(Source& a, std::array<uint8_t, I>& list, bool& use_defau
 }
 
 template<typename Source, std::size_t I>
-inline 
+inline
 void parse_scaling_list(Source& a, std::array<std::uint8_t, I> const& fallback, std::array<std::uint8_t, I> const& def, std::array<std::uint8_t, I>& list) {
   auto scaling_list_present_flag = u(a, 1);
   if(scaling_list_present_flag) {
     bool use_default = false;
     parse_scaling_list(a, list, use_default);
     if(use_default) list = def;
-  }  
+  }
   else
     list = fallback;
 }
@@ -151,8 +172,8 @@ void parse_scaling_lists(Source& a, unsigned chroma_idc,
 }
 
 template<typename Source>
-SequenceParameterSet parse_sps(Source& a) {
-  SequenceParameterSet sps;
+sequence_parameter_set parse_sps(Source& a) {
+  sequence_parameter_set sps;
   sps.profile_idc = u(a, 8);
   sps.constrained_set0_flag = u(a, 1);
   sps.constrained_set1_flag = u(a, 1);
@@ -160,12 +181,12 @@ SequenceParameterSet parse_sps(Source& a) {
   sps.constrained_set3_flag = u(a, 1);
   sps.constrained_set4_flag = u(a, 1);
   sps.constrained_set5_flag = u(a, 1);
-  
+
   u(a, 2);
-  
+
   sps.level_idc = u(a, 8);
   sps.seq_parameter_set_id = ue(a);
-  
+
   memset(&sps.scaling_lists_4x4, 0x10, sizeof(sps.scaling_lists_4x4));
   memset(&sps.scaling_lists_8x8, 0x10, sizeof(sps.scaling_lists_8x8));
 
@@ -177,13 +198,13 @@ SequenceParameterSet parse_sps(Source& a) {
     sps.chroma_format_idc = ue(a);
     if(sps.chroma_format_idc == 3)
       sps.separate_colour_plane_flag = u(a, 1);
-   
+  
     sps.bit_depth_luma_minus8 = ue(a);
     sps.bit_depth_chroma_minus8 = ue(a);
     sps.qpprime_y_zero_transform_bypass_flag = u(a, 1);
     sps.seq_scaling_matrix_present_flag = u(a, 1);
     if(sps.seq_scaling_matrix_present_flag) {
-      parse_scaling_lists(a, sps.chroma_format_idc, default_scaling_lists_4x4, default_scaling_lists_8x8, sps.scaling_lists_4x4, sps.scaling_lists_8x8); 
+      parse_scaling_lists(a, sps.chroma_format_idc, default_scaling_lists_4x4, default_scaling_lists_8x8, sps.scaling_lists_4x4, sps.scaling_lists_8x8);
     }
   }
 
@@ -204,7 +225,7 @@ SequenceParameterSet parse_sps(Source& a) {
   sps.pic_width_in_mbs_minus1 = ue(a);
   sps.pic_height_in_map_units_minus1 = ue(a);
   sps.frame_mbs_only_flag = u(a, 1);
-  if(!sps.frame_mbs_only_flag) 
+  if(!sps.frame_mbs_only_flag)
     sps.mb_adaptive_frame_field_flag = u(a, 1);
   sps.direct_8x8_inference_flag = u(a, 1);
   sps.frame_cropping_flag = u(a, 1);
@@ -218,15 +239,9 @@ SequenceParameterSet parse_sps(Source& a) {
   return sps;
 }
 
-inline
-std::vector<SequenceParameterSet>& add(std::vector<SequenceParameterSet>& spss, SequenceParameterSet&& sps) {
-  spss.resize(std::max(spss.size(), std::size_t(sps.seq_parameter_set_id + 1)));
-  spss[sps.seq_parameter_set_id] = sps;
-  return spss;
-}
 
-struct PictureParameterSet : SequenceParameterSet {
-  unsigned  pic_parameter_set_id;
+struct picture_parameter_set : sequence_parameter_set {
+  unsigned  pic_parameter_set_id = -1u;
   //unsigned  seq_parameter_set_id;
   bool      entropy_coding_mode_flag = false;
   bool      bottom_field_pic_order_in_frame_present_flag = false;
@@ -246,19 +261,32 @@ struct PictureParameterSet : SequenceParameterSet {
 
   bool      transform_8x8_mode_flag = false;
   bool      pic_scaling_matrix_present_flag = false;
+
+  bool is_valid() const { return pic_parameter_set_id != -1u; }
 };
 
+inline
+std::vector<picture_parameter_set>& add(std::vector<picture_parameter_set>& ppss, picture_parameter_set&& pps) {
+  ppss.resize(std::max(ppss.size(), std::size_t(pps.pic_parameter_set_id + 1)));
+  ppss[pps.pic_parameter_set_id] = pps;
+  return ppss;
+}
+
+inline unsigned ChromaArrayType(picture_parameter_set const& pps) {
+  return pps.separate_colour_plane_flag == 0 ? pps.chroma_format_idc : 0;
+} 
+
 template<typename Source>
-PictureParameterSet parse_pps(Source& a, std::vector<SequenceParameterSet> const& spss) {
-  PictureParameterSet pps;
+picture_parameter_set parse_pps(Source& a, std::vector<sequence_parameter_set> const& spss) {
+  picture_parameter_set pps;
 
   pps.pic_parameter_set_id = ue(a);
   pps.seq_parameter_set_id = ue(a);
-  static_cast<SequenceParameterSet&>(pps) = spss.at(pps.seq_parameter_set_id);
+  static_cast<sequence_parameter_set&>(pps) = spss.at(pps.seq_parameter_set_id);
 
   pps.entropy_coding_mode_flag = u(a,1);
   pps.bottom_field_pic_order_in_frame_present_flag = u(a,1);
-  
+
   pps.num_slice_groups_minus1 = ue(a);
   if(pps.num_slice_groups_minus1 > 0) throw std::runtime_error("num_slice_groups_minus1 > 0 is not supported");
 
@@ -267,15 +295,15 @@ PictureParameterSet parse_pps(Source& a, std::vector<SequenceParameterSet> const
 
   pps.weighted_pred_flag = u(a,1);
   pps.weighted_bipred_idc = u(a, 2);
-  
+
   pps.pic_init_qp_minus26 = se(a);
   pps.pic_init_qs_minus26 = se(a);
   pps.second_chroma_qp_index_offset = pps.chroma_qp_index_offset = se(a);
-  
+
   pps.deblocking_filter_control_present_flag = u(a,1);
   pps.constrained_intra_pred_flag = u(a,1);
   pps.redundant_pic_cnt_present_flag = u(a,1);
-  
+
   if(more_rbsp_data(a)) {
     pps.transform_8x8_mode_flag = u(a,1);
     pps.pic_scaling_matrix_present_flag = u(a,1);
@@ -291,40 +319,15 @@ PictureParameterSet parse_pps(Source& a, std::vector<SequenceParameterSet> const
   return pps;
 }
 
-inline
-std::vector<PictureParameterSet>& add(std::vector<PictureParameterSet>& ppss, PictureParameterSet&& pps) {
-  ppss.resize(std::max(ppss.size(), std::size_t(pps.pic_parameter_set_id + 1)));
-  ppss[pps.pic_parameter_set_id] = pps;
-  return ppss;
-}
-
-inline unsigned MaxFrameNum(PictureParameterSet const& pps) { return 1 << (pps.log2_max_frame_num_minus4 + 4); }
-inline unsigned MaxPicOrderCntLsb(PictureParameterSet const& pps) { return 1 << (pps.log2_max_pic_order_cnt_lsb_minus4 + 4);}
-inline unsigned ChromaArrayType(PictureParameterSet const& pps) { return pps.separate_colour_plane_flag == 0 ? pps.chroma_format_idc : 0; }
-
-struct MemoryManagementControlOperation {
-  unsigned id;
-  union {
-    struct {
-      union {
-        unsigned difference_of_pic_nums_minus1;
-        unsigned long_term_pic_num;
-      };
-
-      unsigned long_term_frame_idx;
-    };
-    unsigned max_long_term_frame_idx_plus1;
-  };
-};
-
-struct SliceHeader {
+// slice_header with enough information to distinguish between different pictures
+struct slice_partial_header {
   bool IdrPicFlag;
   unsigned nal_ref_idc;
 
   unsigned first_mb_in_slice;
-  SliceType slice_type;
-  unsigned pic_parameter_set_id;
-  PicType pic_type;
+  slice_coding slice_type;
+  unsigned pic_parameter_set_id = -1u;
+  picture_type pic_type;
   unsigned idr_pic_id;
 
   unsigned frame_num;
@@ -337,9 +340,23 @@ struct SliceHeader {
     };
     int delta_pic_order_cnt[2] = {0,0};
   };
- 
+};
+
+// 7.4.1.2.4 Detection of the first VCL NAL unit of a primary coded picture
+inline
+bool is_new_picture(slice_partial_header const& a, slice_partial_header const& b) {
+  return a.pic_type != b.pic_type
+        || a.pic_parameter_set_id != b.pic_parameter_set_id
+        || a.frame_num != b.frame_num
+        || (a.nal_ref_idc != b.nal_ref_idc && (a.nal_ref_idc == 0 || b.nal_ref_idc == 0))
+        || a.IdrPicFlag != b.IdrPicFlag
+        || (a.IdrPicFlag && (a.idr_pic_id != b.idr_pic_id))
+        || a.pic_order_cnt_lsb != b.pic_order_cnt_lsb || a.delta_pic_order_cnt_bottom != b.delta_pic_order_cnt_bottom;
+}
+
+struct slice_header : slice_partial_header {
   unsigned redundant_pic_cnt;
-  bool direct_spatial_mv_pred_flag = false; 
+  bool direct_spatial_mv_pred_flag = false;
   bool num_ref_idx_active_override_flag = false;
   unsigned num_ref_idx_l0_active_minus1;
   unsigned num_ref_idx_l1_active_minus1;
@@ -349,22 +366,24 @@ struct SliceHeader {
   unsigned luma_log2_weight_denom = 0;
   unsigned chroma_log2_weight_denom = 0;
 
-  struct WeightPredTableElement {
+  struct weight_pred_table_element {
     std::int8_t weight;
     std::int8_t offset;
   };
-  struct ChromaWeightPredTableElement {
-    WeightPredTableElement cb;
-    WeightPredTableElement cr;
+
+  struct chroma_weight_pred_table_element {
+    weight_pred_table_element cb;
+    weight_pred_table_element cr;
   };
+
   struct {
-    std::vector<WeightPredTableElement> luma;
-    std::vector<ChromaWeightPredTableElement> chroma;
+    std::vector<weight_pred_table_element> luma;
+    std::vector<chroma_weight_pred_table_element> chroma;
   } weight_pred_table[2];
 
   bool no_output_of_prior_pics_flag = false;
   bool long_term_reference_flag = false;
-  std::vector<MemoryManagementControlOperation> memory_management_control_operations;
+  std::vector<memory_management_control_operation> mmcos;
 
   unsigned cabac_init_idc = 3; // msvd expects cabac_init_idc for i slices
   int slice_qp_delta = 0;
@@ -375,27 +394,26 @@ struct SliceHeader {
 };
 
 template<typename Source>
-inline
-SliceHeader parse_slice(Source& a, std::vector<PictureParameterSet> const& ppss, unsigned nal_unit_type, unsigned nal_ref_idc) {
-  SliceHeader slice;
+void parse_slice_header_up_to_pps_id(Source& a, unsigned nal_unit_type, unsigned nal_ref_idc, slice_partial_header& slice) {
   slice.IdrPicFlag = nal_unit_type == 5;
   slice.nal_ref_idc = nal_ref_idc;
 
   slice.first_mb_in_slice = ue(a);
-  slice.slice_type = cast_to_slice_type(ue(a));
+  slice.slice_type = cast_to_slice_coding(ue(a));
   slice.pic_parameter_set_id = ue(a);
+}
 
-  auto& pps = ppss.at(slice.pic_parameter_set_id);
-
+template<typename Source>
+void parse_slice_partial_header_after_pps_id(Source& a, picture_parameter_set const& pps, slice_partial_header& slice) {
   if(pps.separate_colour_plane_flag)
     slice.colour_plane_id = ue(a);
 
   slice.frame_num = u(a, pps.log2_max_frame_num_minus4+4);
-  
-  slice.pic_type = PicType::Frame;
+ 
+  slice.pic_type = picture_type::frame;
   if(!pps.frame_mbs_only_flag) {
     if(u(a,1))
-      slice.pic_type = u(a,1) ? PicType::Bottom : PicType::Top;
+      slice.pic_type = u(a,1) ? picture_type::bot : picture_type::top;
   }
 
   if(slice.IdrPicFlag)
@@ -404,27 +422,30 @@ SliceHeader parse_slice(Source& a, std::vector<PictureParameterSet> const& ppss,
   if(pps.pic_order_cnt_type == 0) {
     slice.pic_order_cnt_lsb = u(a, pps.log2_max_pic_order_cnt_lsb_minus4 + 4);
     slice.delta_pic_order_cnt_bottom = 0;
-    if(pps.bottom_field_pic_order_in_frame_present_flag && slice.pic_type == PicType::Frame)
+    if(pps.bottom_field_pic_order_in_frame_present_flag && slice.pic_type == picture_type::frame)
       slice.delta_pic_order_cnt_bottom = se(a);
   }
   else if(pps.pic_order_cnt_type == 1 && !pps.delta_pic_order_always_zero_flag) {
     slice.delta_pic_order_cnt[0] = se(a);
-    slice.delta_pic_order_cnt[1] = (pps.bottom_field_pic_order_in_frame_present_flag && slice.pic_type == PicType::Frame) ?
-      se(a) : 0;
+    slice.delta_pic_order_cnt[1] = (pps.bottom_field_pic_order_in_frame_present_flag && slice.pic_type == picture_type::frame) ? se(a) : 0;
   }
   else {
     slice.delta_pic_order_cnt[0] = slice.delta_pic_order_cnt[1] = 0;
   }
+}
 
-  slice.direct_spatial_mv_pred_flag =  slice.slice_type == SliceType::B ? u(a, 1) : false;
+template<typename Source>
+inline
+bool parse_slice_header_rest(Source& a, picture_parameter_set const& pps, slice_header& slice) {
+  slice.direct_spatial_mv_pred_flag =  slice.slice_type == slice_coding::B ? u(a, 1) : false;
 
-  if(slice.slice_type == SliceType::P || slice.slice_type == SliceType::B) {
+  if(slice.slice_type == slice_coding::P || slice.slice_type == slice_coding::B) {
     slice.num_ref_idx_l0_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
     slice.num_ref_idx_l1_active_minus1 = pps.num_ref_idx_l1_default_active_minus1;
     slice.num_ref_idx_active_override_flag = u(a, 1);
     if(slice.num_ref_idx_active_override_flag) {
       slice.num_ref_idx_l0_active_minus1 = ue(a);
-      if(slice.slice_type == SliceType::B)
+      if(slice.slice_type == slice_coding::B)
         slice.num_ref_idx_l1_active_minus1 = ue(a);
     }
   }
@@ -434,20 +455,23 @@ SliceHeader parse_slice(Source& a, std::vector<PictureParameterSet> const& ppss,
     for(;;) {
       auto modification_of_pic_nums_idc = ue(a);
       if(modification_of_pic_nums_idc == 3) break;
- 
+
       ops.push_back({modification_of_pic_nums_idc, ue(a)});
     }
   };
 
-  if(slice.slice_type != SliceType::I)
+  slice.ref_pic_list_modification[0].clear();
+  slice.ref_pic_list_modification[1].clear();
+
+  if(slice.slice_type != slice_coding::I)
     if(u(a,1)) //ref_pic_list_modification_flag_l0
       ref_pic_list_modification(slice.ref_pic_list_modification[0]);
 
-  if(slice.slice_type == SliceType::B)
+  if(slice.slice_type == slice_coding::B)
     if(u(a,1)) // ref_pic_list_modification_flag_l1
       ref_pic_list_modification(slice.ref_pic_list_modification[1]);
- 
-  if((pps.weighted_pred_flag && slice.slice_type == SliceType::P) || (pps.weighted_bipred_idc == 1 && slice.slice_type == SliceType::B)) {
+
+  if((pps.weighted_pred_flag && slice.slice_type == slice_coding::P) || (pps.weighted_bipred_idc == 1 && slice.slice_type == slice_coding::B)) {
     slice.luma_log2_weight_denom = ue(a);
     if(ChromaArrayType(pps) != 0)
       slice.chroma_log2_weight_denom = ue(a);
@@ -480,34 +504,34 @@ SliceHeader parse_slice(Source& a, std::vector<PictureParameterSet> const& ppss,
     };
 
     read_weight_pred_table(slice.num_ref_idx_l0_active_minus1+1, slice.weight_pred_table[0]);
-    if(slice.slice_type == SliceType::B)
+    if(slice.slice_type == slice_coding::B)
       read_weight_pred_table(slice.num_ref_idx_l1_active_minus1+1, slice.weight_pred_table[1]);
   }
 
-  if(nal_ref_idc) {
+  if(slice.nal_ref_idc) {
+    slice.mmcos.clear();
     if(slice.IdrPicFlag) {
       slice.no_output_of_prior_pics_flag = u(a, 1);
       slice.long_term_reference_flag = u(a, 1);
     }
     else if(u(a,1)) {
-      slice.memory_management_control_operations.clear();
       for(;;) {
-        MemoryManagementControlOperation mmco;
+        memory_management_control_operation mmco;
         mmco.id = ue(a);
         if(mmco.id == 0) break;
-        
+
         if(mmco.id == 1 || mmco.id == 3) mmco.difference_of_pic_nums_minus1 = ue(a);
         if(mmco.id == 2) mmco.long_term_pic_num = ue(a);
         if(mmco.id == 3 || mmco.id == 6) mmco.long_term_frame_idx = ue(a);
         if(mmco.id == 4) mmco.max_long_term_frame_idx_plus1 = ue(a);
 
-        slice.memory_management_control_operations.push_back(mmco);
+        slice.mmcos.push_back(mmco);
       }
     }
   }
 
   slice.cabac_init_idc = 3;
-  if(pps.entropy_coding_mode_flag && slice.slice_type != SliceType::I)
+  if(pps.entropy_coding_mode_flag && slice.slice_type != slice_coding::I)
     slice.cabac_init_idc = ue(a);
 
   slice.slice_qp_delta = se(a);
@@ -519,57 +543,368 @@ SliceHeader parse_slice(Source& a, std::vector<PictureParameterSet> const& ppss,
       slice.slice_alpha_c0_offset_div2 = se(a);
     }
   }
-  return slice;
+  return true;
 }
+ 
+template<typename Buffer>
+struct stored_frame;
 
-inline bool has_mmco5(SliceHeader const& a) {
-  return std::any_of(a.memory_management_control_operations.begin(), a.memory_management_control_operations.end(),
-    [](MemoryManagementControlOperation const& op) { return op.id == 5; });
-}
-
-// 7.4.1.2.4 Detection of the first VCL NAL unit of a primary coded picture
-inline
-bool is_new_picture(SliceHeader const& a, SliceHeader const& b) {
-  return a.pic_type != b.pic_type
-        || a.pic_parameter_set_id != b.pic_parameter_set_id
-        || a.frame_num != b.frame_num
-        || (a.nal_ref_idc != b.nal_ref_idc && (a.nal_ref_idc == 0 || b.nal_ref_idc == 0))
-        || a.IdrPicFlag != b.IdrPicFlag
-        || (a.IdrPicFlag && (a.idr_pic_id != b.idr_pic_id))
-        || a.pic_order_cnt_lsb != b.pic_order_cnt_lsb || a.delta_pic_order_cnt_bottom != b.delta_pic_order_cnt_bottom;
-}
-
-struct POC  {
-  POC() = default;
-  POC(std::uint32_t top, std::uint32_t bottom) : top(top), bottom(bottom) {}
-
-  std::uint32_t top = 0;
-  std::uint32_t bottom = 0;
+struct poc_t {
+  int top;
+  int bot;
 };
 
-struct PocCntType0 {
-  PocCntType0(std::uint32_t MaxPicOrderCntLsb) : MaxPicOrderCntLsb(MaxPicOrderCntLsb) {}
+template<typename Buffer>
+struct stored_picture {
+  picture_type pt;
+  
+  stored_frame<Buffer> const& frame() const;
+  stored_frame<Buffer>& frame();
 
-  POC operator()(PicType pic_type, bool is_reference, std::uint32_t pic_order_cnt_lsb, std::int32_t delta_pic_order_cnt_bottom, bool has_mmco5) {
+  poc_t poc() const;
+
+  Buffer const& buffer() const;
+
+  ref_type rt() const;
+  void rt(ref_type);
+private:
+  stored_picture(picture_type pt) : pt(pt) {}
+  
+  stored_picture(stored_picture const&) = default;
+  stored_picture(stored_picture&&) = default;
+  stored_picture& operator=(stored_picture const&) = default;
+  stored_picture& operator=(stored_picture&&) = default;
+
+  template<typename> friend struct stored_frame;
+  template<typename> friend struct stored_field;
+};
+
+template<typename Buffer>
+struct stored_field : stored_picture<Buffer> {  
+  int poc;
+  bool valid = false;
+
+  ref_type rt = ref_type::none;
+private:
+  stored_field(picture_type pt, bool valid = false, unsigned poc = 0) : stored_picture<Buffer>(pt), poc(poc), valid(valid) {}
+
+  stored_field(stored_field const&) = default;
+  stored_field(stored_field&&) = default;
+  stored_field& operator=(stored_field const&) = default;
+  stored_field& operator=(stored_field&&) = default;
+
+  template<typename> friend struct stored_frame;
+};
+
+template<typename Buffer>
+struct stored_frame : stored_picture<Buffer> {
+  stored_field<Buffer> top = {picture_type::top};
+  stored_field<Buffer> bot = {picture_type::bot};
+
+  Buffer buffer;
+  std::uint32_t frame_num;
+  std::uint32_t long_term_frame_idx;
+
+  stored_frame() : stored_picture<Buffer>(picture_type::frame) {}
+  stored_frame(stored_frame const&) = default;
+  stored_frame(stored_frame&&) = default;
+
+  stored_frame& operator=(stored_frame const&) = default;
+  stored_frame& operator=(stored_frame&&) = default;  
+};
+
+template<typename Buffer>
+stored_frame<Buffer>& stored_picture<Buffer>::frame() {
+  switch(pt) {
+  case picture_type::top: return *utils::container_of(static_cast<stored_field<Buffer>*>(this), &stored_frame<Buffer>::top);
+  case picture_type::bot: return *utils::container_of(static_cast<stored_field<Buffer>*>(this), &stored_frame<Buffer>::bot);
+  default: return *static_cast<stored_frame<Buffer>*>(this);
+  }
+}
+
+template<typename Buffer>
+stored_frame<Buffer> const& stored_picture<Buffer>::frame() const {
+  return const_cast<stored_picture<Buffer>*>(this)->frame();
+}
+
+template<typename Buffer>
+poc_t stored_picture<Buffer>::poc() const {
+  switch(pt) {
+  case picture_type::top: return {frame().top.poc, frame().top.poc};
+  case picture_type::bot: return {frame().bot.poc, frame().bot.poc};
+  default: return {frame().top.poc, frame().bot.poc};
+  }
+}
+
+template<typename Buffer>
+ref_type stored_picture<Buffer>::rt() const {
+  switch(pt) {
+  case picture_type::top: return frame().top.rt;
+  case picture_type::bot: return frame().bot.rt;
+  default:
+    if(!frame().top.valid || !frame().bot.valid) return ref_type::none;
+    if(frame().top.rt == ref_type::long_term && frame().bot.rt == ref_type::long_term)
+      return ref_type::long_term;
+    if(frame().top.rt == ref_type::short_term && frame().bot.rt == ref_type::short_term)
+      return ref_type::short_term;
+    return ref_type::none;
+  }
+}
+
+template<typename Buffer>
+void stored_picture<Buffer>::rt(ref_type rt) {
+  if(pt == picture_type::top)
+    frame().top.rt = rt;
+  else if(pt == picture_type::bot)
+    frame().bot.rt = rt;
+  else
+    frame().top.rt = frame().bot.rt = rt;
+}
+
+template<typename Buffer>
+Buffer const& stored_picture<Buffer>::buffer() const {
+  return frame().buffer;
+}
+
+template<typename Buffer>
+bool is_short_term_reference(stored_picture<Buffer> const& p) { return p.rt() == ref_type::short_term; }
+
+template<typename Buffer>
+bool is_long_term_reference(stored_picture<Buffer> const& p) { return p.rt() == ref_type::long_term; }
+
+template<typename Buffer>
+bool is_reference(stored_picture<Buffer> const& p) { return p.rt() != ref_type::none; }
+
+template<typename Buffer>
+unsigned FrameNum(stored_picture<Buffer> const& p) {
+  return p.frame().frame_num;
+}
+
+template<typename Buffer>
+unsigned LongTermFrameIdx(stored_picture<Buffer> const& p) {
+  return p.frame().long_term_frame_idx;
+}
+
+template<typename Buffer>
+unsigned PicOrderCnt(stored_picture<Buffer> const& p) {
+  switch(p.pt) {
+  case picture_type::top: return p.poc().top;
+  case picture_type::top: return p.poc().bot;
+  default: return std::min(p.poc().top, p.poc().bot);
+  }
+}
+
+void mark_as_unused_for_reference(std::uint32_t) {}
+
+template<typename Buffer>
+void mark_as_unused_for_reference(stored_picture<Buffer>& p) {
+  if(has_top(p.pt)) p.frame().top.rt = ref_type::none;
+  if(has_bot(p.pt)) p.frame().bot.rt = ref_type::none; 
+
+  if(p.frame().rt() == ref_type::none)
+    mark_as_unused_for_reference(p.buffer());
+}
+
+template<typename Buffer>
+struct dpb_iterator : std::iterator<std::forward_iterator_tag, stored_picture<Buffer>> {
+  stored_picture<Buffer>* p;
+
+  dpb_iterator() = default;
+  dpb_iterator(stored_picture<Buffer>* p) : p(p) {}
+
+  stored_picture<Buffer>& operator*() const { return *p; }
+  stored_picture<Buffer>* operator->() const { return p; }
+
+  dpb_iterator& operator ++ () {
+    switch(p->pt) {
+    case picture_type::top: 
+      p = &p->frame().bot;
+      break;
+    case picture_type::bot:
+      p = &(&p->frame()+1)->top;
+      break;
+    default:
+      p = &p->frame()+1;
+      break;
+    }
+    return *this;
+  }
+
+  dpb_iterator operator ++ (int) {
+    auto t = *this;
+    ++(*this);
+    return t;
+  }
+
+  friend bool operator == (dpb_iterator const& a, dpb_iterator const& b) { return a.p == b.p; }
+  friend bool operator != (dpb_iterator const& a, dpb_iterator const& b) { return !(a==b); }
+};
+
+template<typename Buffer>
+utils::range<dpb_iterator<Buffer>> field_view(std::vector<stored_frame<Buffer>>& dpb) {
+  return {{&dpb.begin()->top}, {&dpb.end()->top}};
+}
+
+template<typename Buffer>
+utils::range<dpb_iterator<Buffer>> frame_view(std::vector<stored_frame<Buffer>>& dpb) {
+  return {dpb_iterator<Buffer>{&*dpb.begin()}, dpb_iterator<Buffer>{&*dpb.end()}};
+}
+
+template<typename Buffer>
+struct picture {
+  picture(picture_type pt = picture_type::frame) : pt(pt) {}
+
+  picture(picture const&) = default;
+  picture(picture&&) = default;
+
+  picture& operator=(picture const&) = default;
+  picture& operator=(picture&&) = default;
+
+  picture(stored_picture<Buffer> const& p) : 
+    pt(p.pt), rt(p.rt()), buffer(p.buffer()), poc(p.poc()), frame_num(p.frame().frame_num), long_term_frame_idx(p.frame().long_term_frame_idx) 
+  {}
+
+  picture_type pt;
+  ref_type rt = ref_type::none;
+
+  Buffer buffer;
+
+  poc_t poc;
+
+  unsigned frame_num;
+  unsigned long_term_frame_idx;
+
+  friend
+  bool operator==(picture const& a, picture const& b) {
+    return a.pt == b.pt && a.rt == b.rt && a.buffer == b.buffer;
+  }
+
+  friend bool is_reference(picture const& p) { return p.rt != ref_type::none; }
+
+  friend bool is_short_term_reference(picture const& p) { return p.rt == ref_type::short_term; }
+
+  friend bool is_long_term_reference(picture const& p) { return p.rt == ref_type::long_term; }
+
+  friend unsigned LongTermFrameIdx(picture const& p) { 
+    assert(p.rt == ref_type::long_term);
+    return p.long_term_frame_idx;
+  }
+
+  friend unsigned FrameNum(picture const& p) {
+    return p.frame_num;
+  }
+
+  friend unsigned PicOrderCnt(picture const& p) {
+    switch(p.pt) {
+    case picture_type::top: return p.poc.top;
+    case picture_type::bot: return p.poc.bot;
+    default: return std::min(p.poc.top, p.poc.bot);
+    }
+  }
+
+  friend void mark_as_short_term_reference(picture& p) { p.rt = ref_type::short_term; }
+};
+
+template<typename Buffer>
+void mark_as_long_term_reference(picture<Buffer>& p, unsigned idx = 0) {
+  p.rt = ref_type::long_term;
+  p.long_term_frame_idx = idx;
+}
+
+template<typename Buffer>
+struct context : picture_parameter_set, slice_header {
+  std::vector<stored_frame<Buffer>> dpb;
+
+  using picture = h264::picture<Buffer>;
+  using stored_picture = h264::stored_picture<Buffer>; 
+
+  utils::optional<picture> curr_pic; 
+
+  union {
+    struct {
+      unsigned prevPicOrderCntMsb;
+      unsigned prevPicOrderCntLsb;
+    }; 
+
+    struct {
+      unsigned prevFrameNum;
+      unsigned prevFrameNumOffset;
+    };
+  };
+
+  unsigned MaxFrameNum() const { 
+    return 1 << (log2_max_frame_num_minus4 + 4);
+  }
+
+  unsigned MaxPicOrderCntLsb() const {
+    return 1 << (log2_max_pic_order_cnt_lsb_minus4 + 4);
+  }
+
+  int FrameNumWrap(picture const& p) const {
+    return FrameNum(p) > frame_num ? FrameNum(p) - MaxFrameNum() : FrameNum(p);
+  }
+
+  int PicNum(picture const& p) const {
+    return pic_type == picture_type::frame ? FrameNumWrap(p) : 2 * FrameNumWrap(p) + (pic_type == p.pt);   
+  }
+
+  int CurrPicNum() const {
+    return pic_type == picture_type::frame ? frame_num : frame_num * 2 + 1;
+  }
+
+  unsigned LongTermPicNum(picture const& p) const {
+    return pic_type == picture_type::frame ? LongTermFrameIdx(p) : 2 * LongTermFrameIdx(p) + (pic_type == p.pt);
+  }
+
+  unsigned MaxPicNum() const {
+    return pic_type == picture_type::frame ? MaxFrameNum() : MaxFrameNum()*2;
+  }
+
+  void mark_as_long_term_reference(dpb_iterator<Buffer> const& i, unsigned idx) {
+    for(auto& a: field_view(dpb))
+      if(is_long_term_reference(a) && LongTermFrameIdx(a) == idx && (&i->frame() != &a.frame()))
+        mark_as_unused_for_reference(a);
+    
+    i->frame().long_term_frame_idx = idx;
+    i->rt(ref_type::long_term);
+  }
+
+  bool has_mmco5() const { 
+    for(auto& a: mmcos)
+      if(a.id == 5) return true;
+    return false;
+  }
+
+  unsigned ExpectedDeltaPerPicOrderCntCycle() const {
+    return std::accumulate(offset_for_ref_frame.begin(), offset_for_ref_frame.end(), 0);
+  }
+
+  poc_t poc_cnt_type0() {
+    if(IdrPicFlag) {
+      prevPicOrderCntLsb = 0;
+      prevPicOrderCntMsb = 0;
+    }
+
     std::int32_t PicOrderCntMsb = prevPicOrderCntMsb;
    
-    if(pic_order_cnt_lsb < prevPicOrderCntLsb && ((prevPicOrderCntLsb - pic_order_cnt_lsb) >= (MaxPicOrderCntLsb/2)))
-      PicOrderCntMsb = prevPicOrderCntMsb + MaxPicOrderCntLsb;
-    else if((pic_order_cnt_lsb > prevPicOrderCntLsb) && ((pic_order_cnt_lsb - prevPicOrderCntLsb) > (MaxPicOrderCntLsb / 2)))
-      PicOrderCntMsb = prevPicOrderCntMsb - MaxPicOrderCntLsb;
+    if(pic_order_cnt_lsb < prevPicOrderCntLsb && ((prevPicOrderCntLsb - pic_order_cnt_lsb) >= (MaxPicOrderCntLsb()/2)))
+      PicOrderCntMsb = prevPicOrderCntMsb + MaxPicOrderCntLsb();
+    else if((pic_order_cnt_lsb > prevPicOrderCntLsb) && ((pic_order_cnt_lsb - prevPicOrderCntLsb) > (MaxPicOrderCntLsb()/2)))
+      PicOrderCntMsb = prevPicOrderCntMsb - MaxPicOrderCntLsb();
 
-    POC poc;
-    if(pic_type != PicType::Bottom)
+    poc_t poc;
+    if(pic_type != picture_type::bot)
       poc.top = PicOrderCntMsb + pic_order_cnt_lsb;
-    if(pic_type == PicType::Frame)
-      poc.bottom = poc.top + delta_pic_order_cnt_bottom;
-    else if(pic_type == PicType::Bottom)
-      poc.bottom = PicOrderCntMsb + pic_order_cnt_lsb;
+    
+    if(pic_type == picture_type::frame)
+      poc.bot = poc.top + delta_pic_order_cnt_bottom;
+    else if(pic_type == picture_type::bot)
+      poc.bot = PicOrderCntMsb + pic_order_cnt_lsb;
 
-    if(is_reference) {
-      if(has_mmco5) {
+    if(nal_ref_idc) {
+      if(has_mmco5()) {
         prevPicOrderCntMsb = 0;
-        prevPicOrderCntLsb = pic_type != PicType::Bottom ? poc.top : 0;
+        prevPicOrderCntLsb = (pic_type != picture_type::bot) ? poc.top : 0;
       }
       else {
         prevPicOrderCntMsb = PicOrderCntMsb;
@@ -579,34 +914,25 @@ struct PocCntType0 {
 
     return poc;
   }
-private:
-  const std::uint32_t MaxPicOrderCntLsb;
-  std::int32_t prevPicOrderCntMsb = 0;
-  std::uint32_t prevPicOrderCntLsb = 0;
-};
 
-struct PocCntType1 {
-  PocCntType1(std::uint32_t MaxFrameNum, std::vector<std::int32_t> offset_for_ref_frame, int offset_for_non_ref_pic, int offset_for_top_to_bottom_field) :
-    MaxFrameNum(MaxFrameNum),
-    ExpectedDeltaPerPicOrderCntCycle(calc_expected_delta(offset_for_ref_frame)),
-    offset_for_ref_frame(std::move(offset_for_ref_frame)),
-    offset_for_non_ref_pic(offset_for_non_ref_pic),
-    offset_for_top_to_bottom_field(offset_for_top_to_bottom_field)
-  {}
+  poc_t poc_cnt_type1() {
+    unsigned FrameNumOffset;
 
-  POC operator()(PicType pic_type, bool is_reference, std::uint32_t frame_num, int const delta_pic_order_cnt[2], bool has_mmco5) {
-    auto FrameNumOffset = prevFrameNumOffset;
-    if(prevFrameNum > frame_num)
-      FrameNumOffset += MaxFrameNum;
+    if(IdrPicFlag)
+      FrameNumOffset = 0;
+    else if(prevFrameNum > frame_num)
+      FrameNumOffset = prevFrameNumOffset + MaxFrameNum();
+    else
+      FrameNumOffset = prevFrameNumOffset;
 
-    prevFrameNum = has_mmco5 ? 0 : frame_num;
-    prevFrameNumOffset = has_mmco5 ? 0 : FrameNumOffset;
+    prevFrameNum = has_mmco5() ? 0 : frame_num;
+    prevFrameNumOffset = has_mmco5() ? 0 : FrameNumOffset;
 
     auto num_ref_frames_in_pic_order_cnt_cycle = offset_for_ref_frame.size();
     unsigned absFrameNum = 0;
     if(num_ref_frames_in_pic_order_cnt_cycle != 0) absFrameNum = FrameNumOffset + frame_num;
 
-    if(!is_reference && absFrameNum > 0) absFrameNum -= 1;
+    if(nal_ref_idc == 0 && absFrameNum > 0) absFrameNum -= 1;
 
     unsigned picOrderCntCycleCnt = 0;
     unsigned frameNumInPicOrderCntCycle = 0;
@@ -618,552 +944,322 @@ struct PocCntType1 {
 
     std::int32_t  expectedPicOrderCnt = 0;
     if(absFrameNum > 0) {
-      expectedPicOrderCnt = picOrderCntCycleCnt * ExpectedDeltaPerPicOrderCntCycle;
+      expectedPicOrderCnt = picOrderCntCycleCnt * ExpectedDeltaPerPicOrderCntCycle();
       for(size_t i = 0; i <= frameNumInPicOrderCntCycle; ++i)
         expectedPicOrderCnt += offset_for_ref_frame[i];
     }
 
-    if(!is_reference) expectedPicOrderCnt += offset_for_non_ref_pic;
-
-    POC poc;
-    if(pic_type == PicType::Frame) {
-      poc.top = expectedPicOrderCnt + delta_pic_order_cnt[0];
-      poc.bottom = poc.top + offset_for_top_to_bottom_field + delta_pic_order_cnt[1];
+    if(nal_ref_idc == 0) expectedPicOrderCnt += offset_for_non_ref_pic;
+  
+    if(pic_type == picture_type::frame) {
+      auto top = expectedPicOrderCnt + delta_pic_order_cnt[0];
+      return {top, top + offset_for_top_to_bottom_field + delta_pic_order_cnt[1]}; 
     }
-    else if(pic_type == PicType::Top) {
-      poc.top = expectedPicOrderCnt + delta_pic_order_cnt[0];
-      poc.bottom = 0;
+    else if(pic_type == picture_type::top) {
+      return {expectedPicOrderCnt + delta_pic_order_cnt[0], 0};
     }
     else {
-      poc.bottom = expectedPicOrderCnt + offset_for_top_to_bottom_field + delta_pic_order_cnt[0];
+      return {0, expectedPicOrderCnt + offset_for_top_to_bottom_field + delta_pic_order_cnt[0]};
     }
+  } 
 
-    return poc;
-  }
-private:
-  static std::int32_t calc_expected_delta(std::vector<std::int32_t> const& offset_for_ref_frame) {
-    std::int32_t a = 0;
-    for(auto x: offset_for_ref_frame)
-      a += x;
-    return a;
-  }
+  poc_t poc_cnt_type2() {
+    unsigned FrameNumOffset;
 
-  const std::uint32_t MaxFrameNum;
-  const std::int32_t ExpectedDeltaPerPicOrderCntCycle;
-  const std::vector<std::int32_t> offset_for_ref_frame;
-  const std::int32_t offset_for_non_ref_pic;
-  const std::int32_t offset_for_top_to_bottom_field;
+    if(IdrPicFlag)
+      FrameNumOffset = 0;
+    else if(prevFrameNum > frame_num)
+      FrameNumOffset = prevFrameNumOffset + MaxFrameNum();
+    else
+      FrameNumOffset = prevFrameNumOffset;
 
-  std::uint32_t prevFrameNum = 0;
-  std::uint32_t prevFrameNumOffset = 0;
-};
+    prevFrameNum = has_mmco5() ? 0 : frame_num;
+    prevFrameNumOffset = has_mmco5() ? 0 : FrameNumOffset;
 
-struct PocCntType2 {
-  PocCntType2(std::uint32_t MaxFrameNum) : MaxFrameNum(MaxFrameNum) {}
+    int tempPicOrderCnt =  2 * (FrameNumOffset + frame_num);
+    if(nal_ref_idc == 0) tempPicOrderCnt -= 1;
 
-  POC operator()(PicType pic_type, bool is_reference, std::uint32_t frame_num, bool has_mmco5) {
-    auto FrameNumOffset = prevFrameNumOffset;
-    if(prevFrameNum > frame_num)
-      FrameNumOffset += MaxFrameNum;
-
-    prevFrameNum = has_mmco5 ? 0 : frame_num;
-    prevFrameNumOffset = has_mmco5 ? 0 : FrameNumOffset;
-
-    auto tempPicOrderCnt =  2 * (FrameNumOffset + frame_num);
-    if(!is_reference) tempPicOrderCnt -= 1;
-
-    if(pic_type == PicType::Frame)
+    if(pic_type == picture_type::frame)
       return {tempPicOrderCnt, tempPicOrderCnt};
-    else if(pic_type == PicType::Top)
-      return POC{tempPicOrderCnt, 0};
-    return POC{0, tempPicOrderCnt};
+    else if(pic_type == picture_type::top)
+      return {tempPicOrderCnt, 0};
+    return {0, tempPicOrderCnt};
   }
-private:
-  const std::uint32_t MaxFrameNum;
 
-  std::uint32_t prevFrameNum = 0;
-  std::uint32_t prevFrameNumOffset = 0;
-};
-
-inline
-Variant::variant<PocCntType0, PocCntType1, PocCntType2> init_poc(PictureParameterSet const& pps) {
-  if(pps.pic_order_cnt_type == 0) return PocCntType0(MaxPicOrderCntLsb(pps));
-  else if(pps.pic_order_cnt_type == 1) return PocCntType1(MaxFrameNum(pps), pps.offset_for_ref_frame, pps.offset_for_non_ref_pic, pps.offset_for_top_to_bottom_field);
-  return PocCntType2(MaxFrameNum(pps));
-}
-
-inline
-POC decode_poc(Variant::variant<PocCntType0, PocCntType1, PocCntType2>& cnt, SliceHeader const& slice) {
-  if(cnt.tag() == 0)
-    return cnt.get<0>()(slice.pic_type, slice.nal_ref_idc, slice.pic_order_cnt_lsb, slice.delta_pic_order_cnt_bottom, has_mmco5(slice)); 
-  else if(cnt.tag() == 1)
-    return cnt.get<1>()(slice.pic_type, slice.nal_ref_idc, slice.frame_num, slice.delta_pic_order_cnt, has_mmco5(slice));
-  else 
-    return cnt.get<2>()(slice.pic_type, slice.nal_ref_idc, slice.frame_num, has_mmco5(slice));
-}
-
-enum class RefType {
-  None, Short, Long
-};
-
-template<typename Buffer> struct Picture;
-
-template<typename Buffer>
-struct Frame {
-  Frame() {}
-  Frame(Picture<Buffer>&&);
-
-  PicType pt;
-  
-  struct Field {
-    PicType pt;
-    std::uint16_t frame_num = 0;
-    std::uint16_t long_term_frame_idx = 0;
-    std::uint32_t poc = 0;
-    RefType ref = RefType::None;
-    Buffer buffer;
-
-    friend bool is_short_term_reference(Field const& f) { return f.ref == RefType::Short; }
-    friend bool is_long_term_reference(Field const& f) { return f.ref == RefType::Long; }
-    friend bool is_reference(Field const& f) { return is_short_term_reference(f) || is_long_term_reference(f); }
-  
-    friend std::uint16_t FrameNum(Field const& f) { return f.frame_num; }
-    std::uint16_t& FrameNum(Field& f) { return f.frame_num; }
-    friend std::uint16_t LongTermFrameIdx(Field const& f) { return f.long_term_frame_idx; }
-    friend int PicOrderCnt(Field const& f) { return f.poc; }
-
-    friend void mark_as_unused_for_reference(Field& f) { f.ref = RefType::None; }
-    friend void mark_as_short_term_reference(Field& f) { f.ref = RefType::Short; }
-    friend void mark_as_long_term_reference(Field& f, std::uint16_t idx) { 
-      f.ref = RefType::Long;
-      f.long_term_frame_idx = idx;
+  poc_t decode_poc() {
+    switch(pic_order_cnt_type) {
+    case 0: return poc_cnt_type0();
+    case 1: return poc_cnt_type1();
+    case 2: return poc_cnt_type2();
     }
-  };
-
-  Field top;
-  Field bottom;
-  bool output = false;
-
-  friend bool is_short_term_reference(Frame const& f) {
-    return f.pt == PicType::Frame && ((is_short_term_reference(f.top) && is_reference(f.bottom)) || (is_reference(f.top) && is_short_term_reference(f.bottom)));
-  }
-  friend bool is_long_term_reference(Frame const& f) {
-    return f.pt == PicType::Frame && is_long_term_reference(f.top) && is_long_term_reference(f.bottom);
-  }
-  friend bool is_reference(Frame const& f) { return is_short_term_reference(f) || is_long_term_reference(f); }
-  
-  friend std::uint16_t FrameNum(Frame const& f) { return f.top.frame_num; }
-  friend std::uint16_t& FrameNum(Frame& f) { return f.top.frame_num; }
-  friend std::uint16_t LongTermFrameIdx(Frame const& f) { return f.bottom.long_term_frame_idx; }
-  friend int PicOrderCnt(Frame const& f) { return f.pt == PicType::Frame ? std::min(f.top.poc, f.bottom.poc) : (f.pt == PicType::Top ? f.top.poc : f.bottom.poc); }
-
-  friend void mark_as_unused_for_reference(Frame& f) { f.top.ref = (f.bottom.ref = RefType::None); }
-  friend void mark_as_short_term_reference(Frame& f) { f.top.ref = f.bottom.ref = RefType::Short; }
-  friend void mark_as_long_term_reference(Frame& f, std::uint16_t idx) {
-    f.top.ref = f.bottom.ref = RefType::Long;
-    f.top.long_term_frame_idx = f.bottom.long_term_frame_idx = idx;
-  }
-};
-
-template<typename Buffer>
-struct Picture {
-  Picture() {}
-  Picture(Frame<Buffer> const& f) : 
-    pt(f.pt), frame_num(FrameNum(f)), long_term_frame_idx(LongTermFrameIdx(f)), poc{f.top.poc, f.bottom.poc}, ref(f.top.ref), buffer(f.top.buffer) {}
-  
-  Picture(typename Frame<Buffer>::Field const& f) :
-    pt(f.pt), frame_num(FrameNum(f)), long_term_frame_idx(LongTermFrameIdx(f)), poc{f.poc, f.poc}, ref(f.ref), buffer(f.buffer) {}
-
-  Picture(PicType pt, unsigned frame_num, POC const& poc, Buffer&& buffer) : pt(pt), frame_num(frame_num), poc(poc), buffer(buffer) {}
-
-  friend unsigned FrameNum(Picture const& p) { return p.frame_num; }
-  friend int LongTermFrameIdx(Picture const& p) { return p.long_term_frame_idx; }
-  friend int PicOrderCnt(Picture const& p) { return p.pt == PicType::Frame ? std::min(p.poc.top, p.poc.bottom) : (p.pt == PicType::Top ? p.poc.top : p.poc.bottom); }
-  friend bool operator==(Picture const& a, Picture const& b) { return a.pt == b.pt && a.poc.top == b.poc.top && a.poc.bottom == b.poc.bottom; }
-  friend bool is_long_term_reference(Picture const& p) { return p.ref == RefType::Long; }
-
-  PicType pt = PicType::Top;
-  unsigned frame_num = 0;
-  unsigned long_term_frame_idx = 0;
-  POC poc;
-  RefType ref = RefType::None;
-  Buffer buffer;
-};
-
-template<typename Buffer>
-bool is_complementary_pair(Frame<Buffer> const& top, SliceHeader const& b) {
-  return top.pt == PicType::Top && b.pic_type == PicType::Bottom
-        && top.top.frame_num == b.frame_num
-        && !b.IdrPicFlag
-        && !has_mmco5(b);
-}
-
-template<typename Buffer>
-Frame<Buffer>& merge_complementary_pair(Frame<Buffer>& frame, Picture<Buffer>&& bot) {
-  frame.bottom.pt = PicType::Bottom;
-  frame.bottom.frame_num = frame.top.frame_num;
-  frame.bottom.poc = bot.poc.bottom;
-  frame.bottom.buffer = bot.buffer;
-  frame.pt = PicType::Frame;
-  return frame;
-}
-
-template<typename Buffer>
-inline Frame<Buffer>::Frame(Picture<Buffer>&& p) : pt(p.pt) {
-  top.pt = PicType::Top;
-  bottom.pt = PicType::Bottom;
-  top.frame_num = bottom.frame_num = p.frame_num;
-  top.ref = bottom.ref = p.ref;
-  top.poc = p.poc.top;
-  bottom.poc = p.poc.bottom;
-  if(pt == PicType::Frame) 
-    bottom.buffer = (top.buffer = std::move(p.buffer));
-  else if(pt == PicType::Top)
-    top.buffer = std::move(p.buffer);
-  else
-    bottom.buffer = std::move(p.buffer);
-}
-
-template<typename I>
-// I - ForwardIterator<Frame<Buffer>>
-// iterates over fields in decoded pictures buffer
-class FieldIterator : public std::iterator<std::forward_iterator_tag, decltype(std::declval<I>()->top)> { 
-  PicType pt;
-  I it;
-  I end;
-public:
-  auto operator*() const -> decltype(*&(it->top)) { return pt == PicType::Bottom ? it->bottom : it->top; }
-  auto operator->() const -> decltype(&(it->top)) { return &**this; }
-
-  FieldIterator& operator++() {
-    if(pt == PicType::Top && has_bottom(it->pt))
-      pt = PicType::Bottom;
-    else {
-      ++it;
-      pt = (it == end || has_top(it->pt)) ? PicType::Top : PicType::Bottom;
-    }
-    return *this;
-  }
-
-  friend bool operator == (FieldIterator const& a, FieldIterator const& b) { return a.pt == b.pt && a.it == b.it && a.end == b.end; }
-  friend bool operator != (FieldIterator const& a, FieldIterator const& b) { return !(a==b); }
-  friend bool is_same_frame(FieldIterator const& a, I const& b) { return a.it == b; }
-  friend bool is_same_frame(FieldIterator const& a, FieldIterator const& b) { return a.it == b.it; }
-
-  FieldIterator(I it, I end, PicType pt) : pt(pt), it(it), end(end) {}
-};
-
-template<typename I>
-FieldIterator<I> field_iterator(I it, I end, PicType pt = PicType::Top) { return {it, end, pt}; }
-
-template<typename I>
-inline std::pair<FieldIterator<I>,FieldIterator<I>> field_view(I begin, I end) {
-  return {field_iterator(begin, end, begin == end || has_top(begin->pt) ? PicType::Top : PicType::Bottom), field_iterator(end, end)};
-}
-
-template<typename I>
-inline std::pair<FieldIterator<I>, FieldIterator<I>> field_view(FieldIterator<I> begin, FieldIterator<I> end) {
-  return std::make_pair(begin, end);
-}
-
-template<typename Buffer>
-inline
-auto field_view(std::vector<Frame<Buffer>> const& dpb) -> std::pair<decltype(field_iterator(dpb.begin(), dpb.end())), decltype(field_iterator(dpb.end(), dpb.end()))> {
-  return {field_iterator(dpb.begin(), dpb.end(), dpb.empty() || has_top(dpb.front().pt) ? PicType::Top : PicType::Bottom), field_iterator(dpb.end(), dpb.end())};
-}
-
-template<typename Buffer>
-inline
-auto field_view(std::vector<Frame<Buffer>>& dpb) -> std::pair<decltype(field_iterator(dpb.begin(), dpb.end())), decltype(field_iterator(dpb.end(), dpb.end()))> {
-  return {field_iterator(dpb.begin(), dpb.end(), dpb.empty() || has_top(dpb.front().pt) ? PicType::Top : PicType::Bottom), field_iterator(dpb.end(), dpb.end())};
-}
-
-struct PicNumDecoder {
-  PicNumDecoder(unsigned max_frame_num, PicType pt, unsigned frame_num) : max_frame_num(max_frame_num), pt(pt), frame_num(frame_num) {}
-  PicNumDecoder(PictureParameterSet const& pps, SliceHeader const& slice) : PicNumDecoder(MaxFrameNum(pps), slice.pic_type, slice.frame_num) {}
-
-  unsigned max_frame_num;
-  PicType pt;
-  unsigned frame_num;
-
-  template<typename T>
-  int FrameNumWrap(T const& t) const { return FrameNum(t) > frame_num ? FrameNum(t) - max_frame_num : FrameNum(t); }
-
-  template<typename T>
-  int PicNum(T const& t) const { return pt == PicType::Frame ? FrameNumWrap(t) : 2 * FrameNumWrap(t) + (pt == t.pt);}
-
-  int CurrPicNum() const { return pt == PicType::Frame ? frame_num : frame_num * 2 + 1; }
-
-  template<typename T>
-  unsigned LongTermPicNum(T const& t) const { return pt == PicType::Frame ? LongTermFrameIdx(t) : 2 * LongTermFrameIdx(t) + (pt == t.pt); }
-
-  unsigned MaxPicNum() const { return pt == PicType::Frame ? max_frame_num : max_frame_num * 2; };
-};
-
-template<typename Buffer>
-std::array<std::vector<Picture<Buffer>>,2> construct_reflists(PictureParameterSet const& pps, SliceHeader const& slice,
-  Picture<Buffer> const& curr_pic, std::vector<Frame<Buffer>> const& dpb)
-{
-  PicNumDecoder c{pps, slice};
-
-  std::vector<Picture<Buffer>> short_term_l0;
-  std::vector<Picture<Buffer>> short_term_l1;
-  std::vector<Picture<Buffer>> long_term_l;
-
-  if(slice.pic_type == PicType::Frame) {
-    std::copy_if(dpb.begin(), dpb.end(), std::back_inserter(short_term_l0), [&](Frame<Buffer> const& f) { return is_short_term_reference(f); });
-    std::copy_if(dpb.begin(), dpb.end(), std::back_inserter(long_term_l), [&](Frame<Buffer> const& f) { return is_long_term_reference(f); });
-  }
-  else {
-    auto fields = field_view(dpb);
-    std::copy_if(fields.first, fields.second, std::back_inserter(short_term_l0), [&](typename Frame<Buffer>::Field const& f) { return is_short_term_reference(f); });
-    std::copy_if(fields.first, fields.second, std::back_inserter(long_term_l), [&](typename Frame<Buffer>::Field const& f) { return is_long_term_reference(f); });
-  }
-
-  std::sort(long_term_l.begin(), long_term_l.end(), [&](Picture<Buffer> const& a, Picture<Buffer> const& b) { return LongTermFrameIdx(a) < LongTermFrameIdx(b); });
-
-  if(slice.slice_type == SliceType::P) {
-    std::sort(short_term_l0.begin(), short_term_l0.end(), [&](Picture<Buffer> const& a, Picture<Buffer> const& b) { return c.FrameNumWrap(a) > c.FrameNumWrap(b); });
-  }
-  else if(slice.slice_type == SliceType::B) {
-    short_term_l1 = short_term_l0;
     
-    std::sort(short_term_l0.begin(), short_term_l0.end(), [&](Picture<Buffer> const& a, Picture<Buffer> const& b) {
-      return ((PicOrderCnt(a) <= PicOrderCnt(curr_pic)) ? std::make_tuple(false, -PicOrderCnt(a)-1) : std::make_tuple(true, PicOrderCnt(a)+1)) < 
-             ((PicOrderCnt(b) <= PicOrderCnt(curr_pic)) ? std::make_tuple(false, -PicOrderCnt(b)-1) : std::make_tuple(true, PicOrderCnt(b)+1));
-    });
-
-    std::sort(short_term_l1.begin(), short_term_l1.end(), [&](Picture<Buffer> const& a, Picture<Buffer> const& b) {
-      return ((PicOrderCnt(a) > PicOrderCnt(curr_pic)) ? std::make_tuple(false, PicOrderCnt(a)+1) : std::make_tuple(true, -PicOrderCnt(a)-1)) < 
-             ((PicOrderCnt(b) > PicOrderCnt(curr_pic)) ? std::make_tuple(false, PicOrderCnt(b)+1) : std::make_tuple(true, -PicOrderCnt(b)-1));
-    });
+    throw std::logic_error("unsupported pic_order_cnt_type");
   }
 
-  std::array<std::vector<Picture<Buffer>>, 2> reflist;
+  std::array<std::vector<picture>, 2> construct_reflists() {
+    std::vector<picture> short_term_l0;
+    std::vector<picture> short_term_l1;
+    std::vector<picture> long_term_l;
 
-  if(slice.pic_type != PicType::Frame) {
-    auto init_ref_pic_list_in_fields= [&](std::vector<Picture<Buffer>>&& short_term, std::vector<Picture<Buffer>>&& long_term, std::vector<Picture<Buffer>>& out) {
-      auto fill_reflist = [&](std::vector<Picture<Buffer>>& from, std::vector<Picture<Buffer>>& to) {
-        auto pt = curr_pic.pt;
-        while(!from.empty()) {
-          auto i = std::find_if(from.begin(), from.end(), [&](Picture<Buffer> const& v) { return v.pt == pt; });
-          if(i == from.end()) break;
+    auto dpb_view = pic_type == picture_type::frame ? frame_view(dpb) : field_view(dpb);
+    for(auto& a: dpb_view) {
+      if(is_short_term_reference(a)) short_term_l0.push_back(a);
+      if(is_long_term_reference(a)) long_term_l.push_back(a);
+    }
 
-          to.push_back(*i);
-          from.erase(i);
-          pt = pt == PicType::Top ? PicType::Bottom : PicType::Top;
+    std::sort(long_term_l.begin(), long_term_l.end(), [](picture& a, picture& b) { return LongTermFrameIdx(a) < LongTermFrameIdx(b); });
+
+    if(slice_type == slice_coding::P) {
+      std::sort(short_term_l0.begin(), short_term_l0.end(), [&](picture& a, picture& b) { return FrameNumWrap(a) > FrameNumWrap(b); });
+    }
+    else if(slice_type == slice_coding::B) {
+      short_term_l1 = short_term_l0;
+
+      std::sort(short_term_l0.begin(), short_term_l0.end(), [&](picture& a, picture& b) {
+        return ((PicOrderCnt(a) <= PicOrderCnt(*curr_pic)) ? std::make_tuple(false, -PicOrderCnt(a)-1) : std::make_tuple(true, PicOrderCnt(a)+1)) < 
+               ((PicOrderCnt(b) <= PicOrderCnt(*curr_pic)) ? std::make_tuple(false, -PicOrderCnt(b)-1) : std::make_tuple(true, PicOrderCnt(b)+1));
+      });
+
+      std::sort(short_term_l1.begin(), short_term_l1.end(), [&](picture& a, picture& b) {
+        return ((PicOrderCnt(a) > PicOrderCnt(*curr_pic)) ? std::make_tuple(false, PicOrderCnt(a)+1) : std::make_tuple(true, -PicOrderCnt(a)-1)) < 
+               ((PicOrderCnt(b) > PicOrderCnt(*curr_pic)) ? std::make_tuple(false, PicOrderCnt(b)+1) : std::make_tuple(true, -PicOrderCnt(b)-1));
+      });
+    }
+
+    std::array<std::vector<picture>, 2> reflists;
+
+    // section 8.2.4.2.5
+    if(pic_type != picture_type::frame) {
+      utils::stable_alternate(short_term_l0.begin(), short_term_l0.end(), [&](picture& p) { return p.pt == pic_type; });
+      utils::stable_alternate(short_term_l1.begin(), short_term_l1.end(), [&](picture& p) { return p.pt == pic_type; });
+      utils::stable_alternate(long_term_l.begin(), long_term_l.end(), [&](picture& p) { return p.pt == pic_type; });
+    }
+
+    reflists[0] = std::move(short_term_l0);
+    reflists[0].insert(reflists[0].end(), long_term_l.begin(), long_term_l.end());
+    
+    if(slice_type == slice_coding::B) {
+      reflists[1] = std::move(short_term_l1);
+      reflists[1].insert(reflists[1].end(), long_term_l.begin(), long_term_l.end());
+    }
+
+    if(reflists[1].size() > 1 && reflists[0] == reflists[1]) std::swap(reflists[1][0], reflists[1][1]);
+  
+    // 8.2.4.3 Modification process for reference picture lists
+    auto ref_pic_list_modification_lx = [&](std::vector<picture>& reflist, std::vector<std::pair<unsigned, unsigned>> const& ops) {
+      auto picNumLXPred = CurrPicNum();
+      for(std::size_t i = 0; i < reflist.size() && i < ops.size(); ++i) {
+        auto pos = reflist.end();
+        
+        if(ops[i].first == 0 || ops[i].first == 1) {
+          picNumLXPred += ((ops[i].first == 0) ? -(ops[i].second + 1) : (ops[i].second + 1));
+          if(picNumLXPred < 0) picNumLXPred += MaxPicNum();
+          if(picNumLXPred >= MaxPicNum()) picNumLXPred -= MaxPicNum();
+
+          auto picNumLX = picNumLXPred > CurrPicNum() ? picNumLXPred - CurrPicNum() : picNumLXPred;
+
+          pos = std::find_if(reflist.begin(), reflist.end(), [&](picture& p) { return !is_long_term_reference(p) && PicNum(p) == picNumLX; });    
+        }
+        else if(ops[i].first == 2) {
+          pos = std::find_if(reflist.begin(), reflist.end(), [&](picture& p) { return is_long_term_reference(p) && LongTermPicNum(p) == ops[i].second; });
         }
 
-        to.insert(to.end(), from.begin(), from.end());
-      };
-
-      fill_reflist(short_term, out);
-      fill_reflist(long_term, out);
-    };
-
-    if(slice.slice_type == SliceType::B)
-      init_ref_pic_list_in_fields(std::move(short_term_l1), std::vector<Picture<Buffer>>(long_term_l), reflist[1]);
-    init_ref_pic_list_in_fields(std::move(short_term_l0), std::move(long_term_l), reflist[0]);
-  }
-  else {
-    reflist[0] = std::move(short_term_l0);
-    reflist[0].insert(reflist[0].end(), long_term_l.begin(), long_term_l.end());
-    
-    if(slice.slice_type == SliceType::B) {
-      reflist[1] = std::move(short_term_l1);
-      reflist[1].insert(reflist[1].end(), long_term_l.begin(), long_term_l.end());
-    }
-  }
-
-  if(reflist[1].size() > 1 && reflist[0] == reflist[1]) std::swap(reflist[1][0], reflist[1][1]);
+        if(pos == reflist.end()) throw std::runtime_error("refpic_list_modification - picnum not found in reflist");
+        
+        if(pos - reflist.begin() >= i) {
+          std::rotate(reflist.begin() + i, pos, pos + 1);
+          //auto t = std::move(*pos);
+          //reflist.erase(pos);
+          //reflist.insert(reflist.begin() + i, std::move(t)); 
+        }
+        else
+          reflist.insert(reflist.begin() + i, *pos);
+      } 
+    }; 
+  
+    ref_pic_list_modification_lx(reflists[0], ref_pic_list_modification[0]);
+    ref_pic_list_modification_lx(reflists[1], ref_pic_list_modification[1]);
+  
+    reflists[0].resize(num_ref_idx_l0_active_minus1 + 1);
+    if(slice_type == slice_coding::B) 
+      reflists[1].resize(num_ref_idx_l1_active_minus1 + 1);
  
-  auto ref_pic_list_modification_lx = [&](std::vector<Picture<Buffer>>& reflist, std::vector<std::pair<unsigned, unsigned>> const& ops) {
-    int picNum = c.CurrPicNum();
-    for(std::size_t i = 0; i != std::min(reflist.size(), ops.size()); ++i) {
-      auto pos = reflist.end();
+    return reflists;
+  }
 
-      if(ops[i].first == 0 || ops[i].first == 1) {
-        picNum += ((ops[i].first == 0) ? -(ops[i].second + 1) : (ops[i].second + 1));
-        if(picNum < 0) picNum += c.MaxPicNum();
-        if(picNum > c.MaxPicNum()) picNum -= c.MaxPicNum();
-        pos = std::find_if(reflist.begin(), reflist.end(), [&](Picture<Buffer> const& x) {
-          return !is_long_term_reference(x) && c.PicNum(x) == ((picNum > c.CurrPicNum()) ? picNum - c.MaxPicNum() : picNum);
-        });
-      }
-      else if(ops[i].first == 2) {
-        pos = std::find_if(reflist.begin(), reflist.end(), [&](Picture<Buffer> const& x) {
-          return is_long_term_reference(x) && c.LongTermPicNum(x) == ops[i].second;
-        });
-      }
+  void dec_ref_pic_marking(dpb_iterator<Buffer> curr_pic) {
+    // marking of current picture is in complete_picture function 
+    if(!mmcos.empty()) 
+      adaptive_ref_pic_marking(curr_pic);
+    else 
+      apply_sliding_window(); 
+  }
 
-      if(pos == reflist.end()) throw std::runtime_error("refpic_list_modification - picnum not found in reflist");
-    
-      if(pos - reflist.begin() >= i) {
-        //std::rotate(reflist.begin() + i, pos, pos + 1);
-        auto t = std::move(*pos);
-        reflist.erase(pos);
-        reflist.insert(reflist.begin() + i, std::move(t));
-      }
-      else {
-        reflist.insert(reflist.begin() + i, *pos);
-        //reflist.pop_back();
-      }
-    }
-  };
+  void adaptive_ref_pic_marking(dpb_iterator<Buffer> curr_pic) {
+    auto view = pic_type == picture_type::frame ? frame_view(dpb) : field_view(dpb);
+    auto begin = view.begin();
+    auto end = view.end();
 
-  ref_pic_list_modification_lx(reflist[0], slice.ref_pic_list_modification[0]);
-  ref_pic_list_modification_lx(reflist[1], slice.ref_pic_list_modification[1]);
-  
-  if(reflist[0].size() > slice.num_ref_idx_l0_active_minus1 + 1) reflist[0].erase(reflist[0].begin()+slice.num_ref_idx_l0_active_minus1 + 1, reflist[0].end());
-  if(reflist[1].size() > slice.num_ref_idx_l1_active_minus1 + 1) reflist[1].erase(reflist[1].begin()+slice.num_ref_idx_l1_active_minus1 + 1, reflist[1].end());
-
-  return reflist;
-}
-
-template<typename I>
-inline
-void mark_as_long_term_reference(I const& mark, unsigned long_term_frame_idx, std::pair<I,I> const& dpb) {
-  auto fields = field_view(dpb.first, dpb.second);
-  for(;fields.first != fields.second; ++fields.first)
-    if(is_long_term_reference(*fields.first) && LongTermFrameIdx(*fields.first) == long_term_frame_idx && !is_same_frame(fields.first, mark))
-      mark_as_unused_for_reference(*fields.first);
-
-  mark_as_long_term_reference(*mark, long_term_frame_idx);
-}
-
-template<typename I>
-inline
-void adaptive_ref_pic_marking(PicNumDecoder const& c, std::vector<MemoryManagementControlOperation> mmcos, I current, std::pair<I,I> const& dpb) {
-  std::for_each(mmcos.begin(), mmcos.end(), [&](MemoryManagementControlOperation const& op) {
+    for(auto& op: mmcos) {
       if(op.id == 1) {
-      auto picnum = c.CurrPicNum() - (op.difference_of_pic_nums_minus1 + 1);
-      auto i = std::find_if(dpb.first, dpb.second, [&](typename I::value_type const& a) { return is_short_term_reference(a) && c.PicNum(a) == picnum; });
-      if(i != dpb.second)
-        mark_as_unused_for_reference(*i);
-      else
-        throw std::runtime_error("dec_ref_pic_marking: picnum not found");
-    }
-    else if(op.id == 2) {
-      auto i = std::find_if(dpb.first, dpb.second, [&](typename I::value_type const& a) { return is_long_term_reference(a) && c.LongTermPicNum(a) == op.long_term_pic_num; });
-      if(i != dpb.second)
-        mark_as_unused_for_reference(*i);
-      else
-        throw std::runtime_error("dec_ref_pic_marking: picnum not found");
-    }
-    else if(op.id == 3) {
-      auto picnum = c.CurrPicNum() - (op.difference_of_pic_nums_minus1 + 1);
-      auto i = std::find_if(dpb.first, dpb.second, [&](typename I::value_type const& a) { return is_short_term_reference(a) && c.PicNum(a) == picnum; });
-      if(i != dpb.second)
-        mark_as_long_term_reference(i, op.long_term_frame_idx, dpb);
-      else
-        throw std::runtime_error("dec_ref_pic_marking: picnum not found");
-    }
-    else if(op.id == 4) {
-      for(auto i = dpb.first; i != dpb.second; ++i) 
-        if(is_long_term_reference(*i) && LongTermFrameIdx(*i) >= op.max_long_term_frame_idx_plus1)
+        auto picnum = CurrPicNum() - (op.difference_of_pic_nums_minus1 + 1);
+        auto i = std::find_if(begin, end, [&](stored_picture& a) { return is_short_term_reference(a) && PicNum(a) == picnum; });
+        if(i != end)
           mark_as_unused_for_reference(*i);
-    }
-    else if(op.id == 5) {
-      for(auto i = dpb.first; i != dpb.second; ++i) {
-        if(i != current) mark_as_unused_for_reference(*i);
+        else
+          throw std::runtime_error("dec_ref_pic_marking: picnum not found");
+      }
+      else if(op.id == 2) {
+        auto i = std::find_if(begin, end, [&](stored_picture& a) { return is_long_term_reference(a) && LongTermPicNum(a) == op.long_term_pic_num; });
+        if(i != end)
+          mark_as_unused_for_reference(*i);
+        else
+          throw std::runtime_error("dec_ref_pic_marking: picnum not found");  
+      }
+      else if(op.id == 3) {
+        auto picnum = CurrPicNum() - (op.difference_of_pic_nums_minus1 + 1);
+        auto i = std::find_if(begin, end, [&](stored_picture& a) { return is_short_term_reference(a) && PicNum(a) == picnum; });
+        if(i != end)
+          mark_as_long_term_reference(i, op.long_term_frame_idx);
+        else
+          throw std::runtime_error("dec_ref_pic_marking: picnum not found");
+      }
+      else if(op.id == 4) {
+        for(auto i = begin; i != end; ++i)
+          if(is_long_term_reference(*i) && LongTermFrameIdx(*i) >= op.max_long_term_frame_idx_plus1)
+            mark_as_unused_for_reference(*i);
+      }
+      else if(op.id == 5) {
+        for(auto i = begin; i != end; ++i)
+          if(i != curr_pic) mark_as_unused_for_reference(*i);
+      }
+      else if(op.id == 6) {
+        mark_as_long_term_reference(curr_pic, op.long_term_frame_idx);
       }
     }
-    else if(op.id == 6) {
-      mark_as_long_term_reference(current,op.long_term_frame_idx, dpb);
-    } 
-  });
-}
-
-template<typename Buffer>
-inline
-void apply_sliding_window_dec_ref_pic_marking(PictureParameterSet const& pps, SliceHeader const& slice, std::vector<Frame<Buffer>>& dpb) {
-  auto numShortTerm = std::count_if(dpb.begin(), dpb.end(), [&](Frame<Buffer> const& p) { return p.top.ref == RefType::Short || p.bottom.ref == RefType::Short; });
-  auto numLongTerm = std::count_if(dpb.begin(), dpb.end(), [&](Frame<Buffer> const& p) { return p.top.ref == RefType::Long || p.bottom.ref == RefType::Long; });
-
-  PicNumDecoder num{pps, slice};
-  
-  int n = numShortTerm + numLongTerm - std::max(pps.max_num_ref_frames, 1u);
-  n = std::min(n, static_cast<int>(numShortTerm));
-
-  while((n--) > 0) {
-    mark_as_unused_for_reference(*std::min_element(dpb.begin(), dpb.end(), [&](Frame<Buffer> const& a, Frame<Buffer> const& b) { 
-      return std::make_tuple(!is_short_term_reference(a), num.FrameNumWrap(a)) < std::make_tuple(!is_short_term_reference(b), num.FrameNumWrap(b)); 
-    }));
   }
-}
 
-template<typename Buffer>
-inline
-void dec_ref_pic_marking(PictureParameterSet const& pps, SliceHeader const& slice, std::vector<Frame<Buffer>>& dpb) {
-  assert(!dpb.empty());
-
-  PicNumDecoder picnum{pps, slice};
-
-  if(slice.IdrPicFlag) 
-    for(auto& a: dpb) mark_as_unused_for_reference(a);
-
-  if(slice.pic_type == PicType::Frame)
-    mark_as_short_term_reference(dpb.back());
-  else
-    mark_as_short_term_reference(has_bottom(dpb.back().pt) ? dpb.back().bottom : dpb.back().top);
-
-  if(slice.IdrPicFlag) {
-    if(slice.long_term_reference_flag) {
-      if(slice.pic_type == PicType::Frame)
-        mark_as_long_term_reference(dpb.end()-1, 0, std::make_pair(dpb.begin(), dpb.end()));
-      else
-        mark_as_long_term_reference(field_iterator(dpb.end()-1, dpb.end(), slice.pic_type), 0, field_view(dpb));
+  void apply_sliding_window() {
+    int numShortTerm = 0, numLongTerm = 0;
+    for(auto& a: dpb) {
+      //if(is_short_term_reference(a.top) || is_short_term_reference(a.bot)) ++numShortTerm;
+      //if(is_long_term_reference(a.top) || is_long_term_reference(a.bot)) ++numLongTerm;
+      if(is_short_term_reference(a)) ++numShortTerm;
+      if(is_long_term_reference(a)) ++numLongTerm;
     }
+
+    int n = numShortTerm + numLongTerm - std::max(max_num_ref_frames, 1u);
+    n = std::min(n, static_cast<int>(numShortTerm)); 
+ 
+    while((n--)> 0)
+      mark_as_unused_for_reference(*std::min_element(dpb.begin(), dpb.end(),
+        [&](stored_frame<Buffer> const& a, stored_frame<Buffer> const& b) {
+          return std::make_tuple(!is_short_term_reference(a), FrameNumWrap(a)) < std::make_tuple(!is_short_term_reference(b), FrameNumWrap(b));
+        })); 
   }
-  else if(!slice.memory_management_control_operations.empty()) {
-    if(slice.pic_type == PicType::Frame)
-      adaptive_ref_pic_marking(picnum, slice.memory_management_control_operations, dpb.end()-1, std::make_pair(dpb.begin(), dpb.end()));
+
+  void new_picture() {
+    if(curr_pic) complete_picture();
+
+    curr_pic = picture{pic_type};
+    curr_pic->poc = decode_poc();
+    curr_pic->frame_num = frame_num;
+    curr_pic->buffer = !dpb.empty() && is_complementary_pair() ? dpb.back().buffer : Buffer{};
+  }
+
+  bool is_complementary_pair() {
+    auto& frame = dpb.back();
+    return frame.top.valid && !frame.bot.valid 
+      && curr_pic->pt == picture_type::bot 
+      && curr_pic->frame_num == frame.frame_num 
+      && !IdrPicFlag
+      && !has_mmco5();
+  }
+
+  void complete_picture() {
+    assert(curr_pic);
+
+    if(has_mmco5()) {
+      curr_pic->frame_num = 0;
+      auto tmp = PicOrderCnt(*curr_pic);
+      curr_pic->poc.top -= tmp;
+      curr_pic->poc.bot -= tmp;
+    } 
+
+    if(nal_ref_idc) {
+      mark_as_short_term_reference(*curr_pic); 
+      if(IdrPicFlag) { 
+        for(auto& a: dpb)
+          mark_as_unused_for_reference(a);
+  
+        if(long_term_reference_flag) h264::mark_as_long_term_reference(*curr_pic, 0);
+      }
+    }
+
+    if(!dpb.empty() && is_complementary_pair()) {
+      dpb.back().bot.valid = true;
+      dpb.back().bot.rt = curr_pic->rt;
+      dpb.back().bot.poc = curr_pic->poc.bot;
+    }
+    else {
+      stored_frame<Buffer> frame;
+      frame.frame_num = curr_pic->frame_num;
+      if(curr_pic->rt == ref_type::long_term) frame.long_term_frame_idx = curr_pic->long_term_frame_idx;
+      frame.buffer = std::move(curr_pic->buffer);
+      
+      if(has_top(curr_pic->pt)) {
+        frame.top.valid = true;
+        frame.top.rt = curr_pic->rt;
+        frame.top.poc = curr_pic->poc.top;
+      }
+
+      if(has_bot(curr_pic->pt)) {
+        frame.bot.valid = true;
+        frame.bot.rt = curr_pic->rt;
+        frame.bot.poc = curr_pic->poc.bot;
+      }
+      dpb.push_back(std::move(frame));
+    }
+   
+    curr_pic = utils::nullopt;
+
+    dpb_iterator<Buffer> c;
+    switch(pic_type) {
+    case picture_type::frame: c = {&dpb.back()}; break;
+    case picture_type::top: c = {&dpb.back().top}; break;
+    case picture_type::bot: c = {&dpb.back().bot}; break;
+    }
+ 
+    if(nal_ref_idc) dec_ref_pic_marking(c); 
+  }
+
+  template<typename Source>
+  bool process_slice_header(Source& a, std::vector<picture_parameter_set> const& ppss, unsigned nal_unit_type, unsigned nal_ref_idc) {
+    slice_partial_header sph;
+
+    parse_slice_header_up_to_pps_id(a, nal_unit_type, nal_ref_idc, sph);
+
+    if(sph.pic_parameter_set_id != slice_header::pic_parameter_set_id) {
+      if(curr_pic) complete_picture();
+      if(ppss.size() <= sph.pic_parameter_set_id || !ppss[sph.pic_parameter_set_id].is_valid()) return false;
+      static_cast<picture_parameter_set&>(*this) = ppss[sph.pic_parameter_set_id];
+    }
+    
+    parse_slice_partial_header_after_pps_id(a, *this, sph);
+
+    if(!curr_pic || is_new_picture(sph, *this)) {
+      if(curr_pic) complete_picture();
+      static_cast<slice_partial_header&>(*this) = sph;
+    }
     else
-      adaptive_ref_pic_marking(picnum, slice.memory_management_control_operations, field_iterator(dpb.end()-1, dpb.end(), slice.pic_type), field_view(dpb));
+      static_cast<slice_partial_header&>(*this) = sph;
+
+    parse_slice_header_rest(a, *this, *this);
+
+    if(!curr_pic) new_picture(); 
+  
+    return true;
   }
-  else {
-    apply_sliding_window_dec_ref_pic_marking(pps, slice, dpb);
-  }
-}
+};
 
-inline
-std::size_t max_dec_frame_buffering(SequenceParameterSet const& s) {
-  static const std::initializer_list<std::pair<unsigned, unsigned>> max_dpb_mbs_map = {
-    {10, 396},
-    {11, 900},
-    {12, 2376},
-    {13, 2376},
-    {20, 2376},
-    {21, 4752},
-    {22, 8100},
-    {30, 8100},
-    {31, 18000},
-    {32, 20480},
-    {40, 32768},
-    {41, 32768},
-    {42, 34816},
-    {50, 110400},
-    {51, 184320},
-    {52, 184320}
-  };
-
-  auto i = std::find_if(max_dpb_mbs_map.begin(), max_dpb_mbs_map.end(), [&](std::pair<unsigned, unsigned> const& a) { return a.first == s.level_idc; });
-  if(i == max_dpb_mbs_map.end()) throw std::runtime_error("unsupported level");
-
-  auto pic_in_mbs = (s.pic_width_in_mbs_minus1 + 1)*(s.pic_height_in_map_units_minus1 + 1)*(s.frame_mbs_only_flag ? 1 : 2);
-
-  return std::min(i->second/pic_in_mbs, 16u);
-}
-
-template<typename Buffer>
-struct context {
-  PictureParameterSet const& pps;
-  SliceHeader const& slice;
-  std::vector<Frame<Buffer>> dpb;
-  Picture<Buffer> curpic;
-}; 
-
-}
-
-#endif
-
+} // namespace h264
