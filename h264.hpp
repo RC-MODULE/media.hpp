@@ -100,6 +100,8 @@ struct sequence_parameter_set {
   unsigned  frame_crop_bottom_offset =0;
 };
 
+inline unsigned pic_width_in_mbs(sequence_parameter_set const& sps) { return sps.pic_width_in_mbs_minus1 + 1; }
+inline unsigned pic_height_in_mbs(sequence_parameter_set const& sps) { return (sps.pic_height_in_map_units_minus1+1)*(sps.frame_mbs_only_flag ? 1 : 2); }
 
 inline
 std::vector<sequence_parameter_set>& add(std::vector<sequence_parameter_set>& spss, sequence_parameter_set&& sps) {
