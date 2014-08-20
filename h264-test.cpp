@@ -105,10 +105,10 @@ int main(int argc, char* argv[]) {
           std::cout << "new picture:" << *ctx.curr_pic << std::endl;
         }
 
-        std::cout << "new_slice: {" << (ctx.slice_type == slice_coding::I ? "I" : ( ctx.slice_type == slice_coding::P ? "P" : "B"))
+        std::cout << "new_slice: {" << (ctx.slice_type == coding_type::I ? "I" : ( ctx.slice_type == coding_type::P ? "P" : "B"))
           << "," << ctx.first_mb_in_slice << "}" << std::endl;
 
-        if(ctx.slice_type != slice_coding::I) {
+        if(ctx.slice_type != coding_type::I) {
           auto reflists = ctx.construct_reflists();
           if(!reflists[0].empty()) std::cout << "reflist0:" << reflists[0] << std::endl;
           if(!reflists[1].empty()) std::cout << "reflist1:" << reflists[1] << std::endl;

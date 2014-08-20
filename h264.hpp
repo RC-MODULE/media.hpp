@@ -1,8 +1,12 @@
+#ifndef __h264_hpp__61023805_eed5_4faf_b336_2267b0960b51__
+#define __h264_hpp__61023805_eed5_4faf_b336_2267b0960b51__
+
 #include <vector>
 #include <array>
 #include <cassert>
 #include <algorithm>
 #include <numeric>
+#include <cstring>
 
 #include "utils.hpp"
 #include "bitstream.hpp"
@@ -13,14 +17,14 @@ enum class picture_type { frame, top, bot };
 inline bool has_top(picture_type pt) { return pt == picture_type::frame || pt == picture_type::top; }
 inline bool has_bot(picture_type pt) { return pt == picture_type::frame || pt == picture_type::bot; }
 
-enum class slice_coding { I, P, B };
+enum class coding_type { I, P, B };
 
 inline
-slice_coding cast_to_slice_coding(std::uint32_t t) {
+coding_type cast_to_coding_type(std::uint32_t t) {
   switch(t % 5) {
-  case 0: return slice_coding::P;
-  case 1: return slice_coding::B;
-  case 2: return slice_coding::I;
+  case 0: return coding_type::P;
+  case 1: return coding_type::B;
+  case 2: return coding_type::I;
   default: throw std::runtime_error("Unsupported slice type");
   }
 }
@@ -325,7 +329,7 @@ struct slice_partial_header {
   unsigned nal_ref_idc;
 
   unsigned first_mb_in_slice;
-  slice_coding slice_type;
+  coding_type slice_type;
   unsigned pic_parameter_set_id = -1u;
   picture_type pic_type;
   unsigned idr_pic_id;
@@ -399,7 +403,7 @@ void parse_slice_header_up_to_pps_id(Source& a, unsigned nal_unit_type, unsigned
   slice.nal_ref_idc = nal_ref_idc;
 
   slice.first_mb_in_slice = ue(a);
-  slice.slice_type = cast_to_slice_coding(ue(a));
+  slice.slice_type = cast_to_coding_type(ue(a));
   slice.pic_parameter_set_id = ue(a);
 }
 
@@ -437,15 +441,15 @@ void parse_slice_partial_header_after_pps_id(Source& a, picture_parameter_set co
 template<typename Source>
 inline
 bool parse_slice_header_rest(Source& a, picture_parameter_set const& pps, slice_header& slice) {
-  slice.direct_spatial_mv_pred_flag =  slice.slice_type == slice_coding::B ? u(a, 1) : false;
+  slice.direct_spatial_mv_pred_flag =  slice.slice_type == coding_type::B ? u(a, 1) : false;
 
-  if(slice.slice_type == slice_coding::P || slice.slice_type == slice_coding::B) {
+  if(slice.slice_type == coding_type::P || slice.slice_type == coding_type::B) {
     slice.num_ref_idx_l0_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
     slice.num_ref_idx_l1_active_minus1 = pps.num_ref_idx_l1_default_active_minus1;
     slice.num_ref_idx_active_override_flag = u(a, 1);
     if(slice.num_ref_idx_active_override_flag) {
       slice.num_ref_idx_l0_active_minus1 = ue(a);
-      if(slice.slice_type == slice_coding::B)
+      if(slice.slice_type == coding_type::B)
         slice.num_ref_idx_l1_active_minus1 = ue(a);
     }
   }
@@ -463,15 +467,15 @@ bool parse_slice_header_rest(Source& a, picture_parameter_set const& pps, slice_
   slice.ref_pic_list_modification[0].clear();
   slice.ref_pic_list_modification[1].clear();
 
-  if(slice.slice_type != slice_coding::I)
+  if(slice.slice_type != coding_type::I)
     if(u(a,1)) //ref_pic_list_modification_flag_l0
       ref_pic_list_modification(slice.ref_pic_list_modification[0]);
 
-  if(slice.slice_type == slice_coding::B)
+  if(slice.slice_type == coding_type::B)
     if(u(a,1)) // ref_pic_list_modification_flag_l1
       ref_pic_list_modification(slice.ref_pic_list_modification[1]);
 
-  if((pps.weighted_pred_flag && slice.slice_type == slice_coding::P) || (pps.weighted_bipred_idc == 1 && slice.slice_type == slice_coding::B)) {
+  if((pps.weighted_pred_flag && slice.slice_type == coding_type::P) || (pps.weighted_bipred_idc == 1 && slice.slice_type == coding_type::B)) {
     slice.luma_log2_weight_denom = ue(a);
     if(ChromaArrayType(pps) != 0)
       slice.chroma_log2_weight_denom = ue(a);
@@ -504,7 +508,7 @@ bool parse_slice_header_rest(Source& a, picture_parameter_set const& pps, slice_
     };
 
     read_weight_pred_table(slice.num_ref_idx_l0_active_minus1+1, slice.weight_pred_table[0]);
-    if(slice.slice_type == slice_coding::B)
+    if(slice.slice_type == coding_type::B)
       read_weight_pred_table(slice.num_ref_idx_l1_active_minus1+1, slice.weight_pred_table[1]);
   }
 
@@ -531,7 +535,7 @@ bool parse_slice_header_rest(Source& a, picture_parameter_set const& pps, slice_
   }
 
   slice.cabac_init_idc = 3;
-  if(pps.entropy_coding_mode_flag && slice.slice_type != slice_coding::I)
+  if(pps.entropy_coding_mode_flag && slice.slice_type != coding_type::I)
     slice.cabac_init_idc = ue(a);
 
   slice.slice_qp_delta = se(a);
@@ -1009,10 +1013,10 @@ struct context : picture_parameter_set, slice_header {
 
     std::sort(long_term_l.begin(), long_term_l.end(), [](picture& a, picture& b) { return LongTermFrameIdx(a) < LongTermFrameIdx(b); });
 
-    if(slice_type == slice_coding::P) {
+    if(slice_type == coding_type::P) {
       std::sort(short_term_l0.begin(), short_term_l0.end(), [&](picture& a, picture& b) { return FrameNumWrap(a) > FrameNumWrap(b); });
     }
-    else if(slice_type == slice_coding::B) {
+    else if(slice_type == coding_type::B) {
       short_term_l1 = short_term_l0;
 
       std::sort(short_term_l0.begin(), short_term_l0.end(), [&](picture& a, picture& b) {
@@ -1038,7 +1042,7 @@ struct context : picture_parameter_set, slice_header {
     reflists[0] = std::move(short_term_l0);
     reflists[0].insert(reflists[0].end(), long_term_l.begin(), long_term_l.end());
     
-    if(slice_type == slice_coding::B) {
+    if(slice_type == coding_type::B) {
       reflists[1] = std::move(short_term_l1);
       reflists[1].insert(reflists[1].end(), long_term_l.begin(), long_term_l.end());
     }
@@ -1081,7 +1085,7 @@ struct context : picture_parameter_set, slice_header {
     ref_pic_list_modification_lx(reflists[1], ref_pic_list_modification[1]);
   
     reflists[0].resize(num_ref_idx_l0_active_minus1 + 1);
-    if(slice_type == slice_coding::B) 
+    if(slice_type == coding_type::B) 
       reflists[1].resize(num_ref_idx_l1_active_minus1 + 1);
  
     return reflists;
@@ -1263,3 +1267,5 @@ struct context : picture_parameter_set, slice_header {
 };
 
 } // namespace h264
+
+#endif
