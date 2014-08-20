@@ -1013,20 +1013,20 @@ struct context : picture_parameter_set, slice_header {
       if(is_long_term_reference(a)) long_term_l.push_back(a);
     }
 
-    std::sort(long_term_l.begin(), long_term_l.end(), [](picture& a, picture& b) { return LongTermFrameIdx(a) < LongTermFrameIdx(b); });
+    std::sort(long_term_l.begin(), long_term_l.end(), [](picture const& a, picture const& b) { return LongTermFrameIdx(a) < LongTermFrameIdx(b); });
 
     if(slice_type == coding_type::P) {
-      std::sort(short_term_l0.begin(), short_term_l0.end(), [&](picture& a, picture& b) { return FrameNumWrap(a) > FrameNumWrap(b); });
+      std::sort(short_term_l0.begin(), short_term_l0.end(), [&](picture const& a, picture const& b) { return FrameNumWrap(a) > FrameNumWrap(b); });
     }
     else if(slice_type == coding_type::B) {
       short_term_l1 = short_term_l0;
 
-      std::sort(short_term_l0.begin(), short_term_l0.end(), [&](picture& a, picture& b) {
+      std::sort(short_term_l0.begin(), short_term_l0.end(), [&](picture const& a, picture const& b) {
         return ((PicOrderCnt(a) <= PicOrderCnt(*curr_pic)) ? std::make_tuple(false, -PicOrderCnt(a)-1) : std::make_tuple(true, PicOrderCnt(a)+1)) < 
                ((PicOrderCnt(b) <= PicOrderCnt(*curr_pic)) ? std::make_tuple(false, -PicOrderCnt(b)-1) : std::make_tuple(true, PicOrderCnt(b)+1));
       });
 
-      std::sort(short_term_l1.begin(), short_term_l1.end(), [&](picture& a, picture& b) {
+      std::sort(short_term_l1.begin(), short_term_l1.end(), [&](picture const& a, picture const& b) {
         return ((PicOrderCnt(a) > PicOrderCnt(*curr_pic)) ? std::make_tuple(false, PicOrderCnt(a)+1) : std::make_tuple(true, -PicOrderCnt(a)-1)) < 
                ((PicOrderCnt(b) > PicOrderCnt(*curr_pic)) ? std::make_tuple(false, PicOrderCnt(b)+1) : std::make_tuple(true, -PicOrderCnt(b)-1));
       });
@@ -1036,9 +1036,9 @@ struct context : picture_parameter_set, slice_header {
 
     // section 8.2.4.2.5
     if(pic_type != picture_type::frame) {
-      utils::stable_alternate(short_term_l0.begin(), short_term_l0.end(), [&](picture& p) { return p.pt == pic_type; });
-      utils::stable_alternate(short_term_l1.begin(), short_term_l1.end(), [&](picture& p) { return p.pt == pic_type; });
-      utils::stable_alternate(long_term_l.begin(), long_term_l.end(), [&](picture& p) { return p.pt == pic_type; });
+      utils::stable_alternate(short_term_l0.begin(), short_term_l0.end(), [&](picture const& p) { return p.pt == pic_type; });
+      utils::stable_alternate(short_term_l1.begin(), short_term_l1.end(), [&](picture const& p) { return p.pt == pic_type; });
+      utils::stable_alternate(long_term_l.begin(), long_term_l.end(), [&](picture const& p) { return p.pt == pic_type; });
     }
 
     reflists[0] = std::move(short_term_l0);
