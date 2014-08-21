@@ -14,8 +14,20 @@
 namespace h264 {
 enum class picture_type { frame, top, bot };
 
+enum class structure { frame, top, bot, pair };
+
 inline bool has_top(picture_type pt) { return pt == picture_type::frame || pt == picture_type::top; }
 inline bool has_bot(picture_type pt) { return pt == picture_type::frame || pt == picture_type::bot; }
+inline bool has_top(structure s) { return s == structure::frame || s == structure::pair || s == structure::top; }
+inline bool has_bot(structure s) { return s == structure::frame || s == structure::pair || s == structure::bot; }
+
+inline bool operator == (picture_type pt, structure s) {
+  return (has_top(pt) == has_top(s)) && (has_bot(pt) == has_bot(s));
+}
+
+inline bool operator == (structure s, picture_type pt) { return pt == s; }
+
+inline constexpr structure to_structure(picture_type pt) { return static_cast<structure>(static_cast<int>(pt)); }
 
 enum class coding_type { I, P, B };
 
@@ -573,6 +585,8 @@ struct stored_picture {
 
   ref_type rt() const;
   void rt(ref_type);
+
+  h264::structure structure() const;
 private:
   stored_picture(picture_type pt) : pt(pt) {}
   
@@ -588,11 +602,9 @@ private:
 template<typename Buffer>
 struct stored_field : stored_picture<Buffer> {  
   int poc;
-  bool valid = false;
-
   ref_type rt = ref_type::none;
 private:
-  stored_field(picture_type pt, bool valid = false, unsigned poc = 0) : stored_picture<Buffer>(pt), poc(poc), valid(valid) {}
+  stored_field(picture_type pt, unsigned poc = 0) : stored_picture<Buffer>(pt), poc(poc) {}
 
   stored_field(stored_field const&) = default;
   stored_field(stored_field&&) = default;
@@ -606,6 +618,7 @@ template<typename Buffer>
 struct stored_frame : stored_picture<Buffer> {
   stored_field<Buffer> top = {picture_type::top};
   stored_field<Buffer> bot = {picture_type::bot};
+  h264::structure s;
 
   Buffer buffer;
   std::uint32_t frame_num;
@@ -643,12 +656,18 @@ poc_t stored_picture<Buffer>::poc() const {
 }
 
 template<typename Buffer>
+structure stored_picture<Buffer>::structure() const {
+  if(pt == picture_type::frame) return frame().s;
+  return to_structure(pt);
+}
+
+template<typename Buffer>
 ref_type stored_picture<Buffer>::rt() const {
   switch(pt) {
   case picture_type::top: return frame().top.rt;
   case picture_type::bot: return frame().bot.rt;
   default:
-    if(!frame().top.valid || !frame().bot.valid) return ref_type::none;
+    if(!has_top(structure()) || !has_bot(structure())) return ref_type::none;
     if(frame().top.rt == ref_type::long_term && frame().bot.rt == ref_type::long_term)
       return ref_type::long_term;
     if(frame().top.rt == ref_type::short_term && frame().bot.rt == ref_type::short_term)
@@ -758,7 +777,8 @@ utils::range<dpb_iterator<Buffer>> frame_view(std::vector<stored_frame<Buffer>>&
 
 template<typename Buffer>
 struct picture {
-  picture(picture_type pt = picture_type::frame) : pt(pt) {}
+  picture(structure s = structure::frame) : s(s) {}
+  picture(picture_type pt) : picture(to_structure(pt)) {}
 
   picture(picture const&) = default;
   picture(picture&&) = default;
@@ -767,10 +787,10 @@ struct picture {
   picture& operator=(picture&&) = default;
 
   picture(stored_picture<Buffer> const& p) : 
-    pt(p.pt), rt(p.rt()), buffer(p.buffer()), poc(p.poc()), frame_num(p.frame().frame_num), long_term_frame_idx(p.frame().long_term_frame_idx) 
+    s(p.structure()), rt(p.rt()), buffer(p.buffer()), poc(p.poc()), frame_num(p.frame().frame_num), long_term_frame_idx(p.frame().long_term_frame_idx) 
   {}
 
-  picture_type pt;
+  structure s;
   ref_type rt = ref_type::none;
 
   Buffer buffer;
@@ -782,7 +802,7 @@ struct picture {
 
   friend
   bool operator==(picture const& a, picture const& b) {
-    return a.pt == b.pt && a.rt == b.rt && a.buffer == b.buffer;
+    return a.s == b.s && a.rt == b.rt && a.buffer == b.buffer;
   }
 
   friend bool is_reference(picture const& p) { return p.rt != ref_type::none; }
@@ -801,9 +821,9 @@ struct picture {
   }
 
   friend unsigned PicOrderCnt(picture const& p) {
-    switch(p.pt) {
-    case picture_type::top: return p.poc.top;
-    case picture_type::bot: return p.poc.bot;
+    switch(p.s) {
+    case structure::top: return p.poc.top;
+    case structure::bot: return p.poc.bot;
     default: return std::min(p.poc.top, p.poc.bot);
     }
   }
@@ -851,7 +871,7 @@ struct context : picture_parameter_set, slice_header {
   }
 
   int PicNum(picture const& p) const {
-    return pic_type == picture_type::frame ? FrameNumWrap(p) : 2 * FrameNumWrap(p) + (pic_type == p.pt);   
+    return pic_type == picture_type::frame ? FrameNumWrap(p) : 2 * FrameNumWrap(p) + (pic_type == p.s);   
   }
 
   int CurrPicNum() const {
@@ -859,7 +879,7 @@ struct context : picture_parameter_set, slice_header {
   }
 
   unsigned LongTermPicNum(picture const& p) const {
-    return pic_type == picture_type::frame ? LongTermFrameIdx(p) : 2 * LongTermFrameIdx(p) + (pic_type == p.pt);
+    return pic_type == picture_type::frame ? LongTermFrameIdx(p) : 2 * LongTermFrameIdx(p) + (pic_type == p.s);
   }
 
   unsigned MaxPicNum() const {
@@ -1036,9 +1056,9 @@ struct context : picture_parameter_set, slice_header {
 
     // section 8.2.4.2.5
     if(pic_type != picture_type::frame) {
-      utils::stable_alternate(short_term_l0.begin(), short_term_l0.end(), [&](picture const& p) { return p.pt == pic_type; });
-      utils::stable_alternate(short_term_l1.begin(), short_term_l1.end(), [&](picture const& p) { return p.pt == pic_type; });
-      utils::stable_alternate(long_term_l.begin(), long_term_l.end(), [&](picture const& p) { return p.pt == pic_type; });
+      utils::stable_alternate(short_term_l0.begin(), short_term_l0.end(), [&](picture const& p) { return p.s == pic_type; });
+      utils::stable_alternate(short_term_l1.begin(), short_term_l1.end(), [&](picture const& p) { return p.s == pic_type; });
+      utils::stable_alternate(long_term_l.begin(), long_term_l.end(), [&](picture const& p) { return p.s == pic_type; });
     }
 
     reflists[0] = std::move(short_term_l0);
@@ -1175,8 +1195,8 @@ struct context : picture_parameter_set, slice_header {
 
   bool is_complementary_pair() {
     auto& frame = dpb.back();
-    return frame.top.valid && !frame.bot.valid 
-      && curr_pic->pt == picture_type::bot 
+    return frame.s == structure::top 
+      && curr_pic->s == picture_type::bot 
       && curr_pic->frame_num == frame.frame_num 
       && !IdrPicFlag
       && !has_mmco5();
@@ -1203,7 +1223,7 @@ struct context : picture_parameter_set, slice_header {
     }
 
     if(!dpb.empty() && is_complementary_pair()) {
-      dpb.back().bot.valid = true;
+      dpb.back().s = structure::pair;
       dpb.back().bot.rt = curr_pic->rt;
       dpb.back().bot.poc = curr_pic->poc.bot;
     }
@@ -1212,15 +1232,14 @@ struct context : picture_parameter_set, slice_header {
       frame.frame_num = curr_pic->frame_num;
       if(curr_pic->rt == ref_type::long_term) frame.long_term_frame_idx = curr_pic->long_term_frame_idx;
       frame.buffer = std::move(curr_pic->buffer);
-      
-      if(has_top(curr_pic->pt)) {
-        frame.top.valid = true;
+      frame.s = curr_pic->s;
+ 
+      if(has_top(curr_pic->s)) {
         frame.top.rt = curr_pic->rt;
         frame.top.poc = curr_pic->poc.top;
       }
 
-      if(has_bot(curr_pic->pt)) {
-        frame.bot.valid = true;
+      if(has_bot(curr_pic->s)) {
         frame.bot.rt = curr_pic->rt;
         frame.bot.poc = curr_pic->poc.bot;
       }

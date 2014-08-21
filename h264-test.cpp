@@ -5,24 +5,28 @@ using namespace h264;
 std::ostream& operator << (std::ostream& os, picture_type pt) {
   return os << (pt == picture_type::frame ? "F" : (pt == picture_type::top ? "T" : "B"));
 }
+
+std::ostream& operator << (std::ostream& os, structure s) {
+  switch(s) {
+  case structure::frame:
+  case structure::pair: return os << "F";
+  case structure::top: return os << "T";
+  case structure::bot: return os << "B";
+  }
+}
+
 std::ostream& operator << (std::ostream& os, ref_type rt) {
   return os << (rt == ref_type::short_term ? "short" : rt == ref_type::long_term ? "long" : "none");
 }
 
 template<typename Buffer> 
 std::ostream& operator << (std::ostream& os, picture<Buffer> const& p) {
-  return os << "{" << p.pt << "," << p.frame_num << "," << PicOrderCnt(p) << "," << p.rt << "}";
-}
-
-template<typename Buffer>
-picture_type fields_to_pic_type(stored_frame<Buffer> const& f) { 
-  if(f.top.valid) return f.bot.valid ? picture_type::frame: picture_type::top;
-  return picture_type::bot;
+  return os << "{" << p.s << "," << p.frame_num << "," << PicOrderCnt(p) << "," << p.rt << "}";
 }
 
 template<typename Buffer> 
 std::ostream& operator << (std::ostream& os, stored_frame<Buffer> const& p) {
-  return os << "{" << fields_to_pic_type(p) << "," << p.frame_num << ",{" << unsigned(p.top.poc) << "," << p.top.rt << "," << p.long_term_frame_idx << "},{" 
+  return os << "{" << p.s << "," << p.frame_num << ",{" << unsigned(p.top.poc) << "," << p.top.rt << "," << p.long_term_frame_idx << "},{" 
       << unsigned(p.bot.poc) << "," << p.bot.rt << "," << p.long_term_frame_idx << "}}";
 }
 
