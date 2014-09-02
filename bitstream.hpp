@@ -8,9 +8,116 @@
 #include <vector>
 #include <system_error>
 
-#include <asio.hpp>
-
 namespace h264 {
+
+class cbitptr {
+  std::uint8_t const* p = nullptr;
+  int offset = 0;
+public:
+  cbitptr() noexcept = default;
+  cbitptr(std::uint8_t const* p, int offset = 0) noexcept : p(p) {
+    *this += offset;
+  }
+  
+  cbitptr(cbitptr const&) noexcept = default;
+  cbitptr(cbitptr&&) noexcept = default;
+
+  cbitptr& operator = (cbitptr const&) noexcept = default;
+  cbitptr& operator = (cbitptr&&) noexcept = default;
+
+  std::uint8_t const* ptr() const { return p; }
+  std::size_t shift() const { return offset; }
+
+  friend bool operator == (cbitptr const& a, cbitptr const& b) {
+    return a.p == b.p && a.offset == b.offset;
+  }
+  
+  friend bool operator != (cbitptr const& a, cbitptr const& b) {
+    return !(a == b);
+  }
+
+  friend bool operator < (cbitptr const& a, cbitptr const& b) {
+    if(a.p == b.p) 
+      return a.offset < b.offset;
+
+    return a.p < b.p;
+  }
+
+  friend bool operator <= (cbitptr const& a, cbitptr const& b) {
+    return a < b || a == b;
+  }
+
+  friend bool operator >= (cbitptr const& a, cbitptr const& b) {
+    return !(a < b);
+  }
+
+  friend bool operator > (cbitptr const& a, cbitptr const& b) {
+    return !(a <= b);
+  }
+
+  cbitptr& operator += (int n) {
+    offset += n % 8;
+    p += n / 8;
+
+    if(offset < 0) {
+      offset += 8;
+      p -= 1;
+    }
+
+    return *this;
+  }
+
+  cbitptr& operator -= (int n) {
+    return *this += -n;
+  }
+
+  explicit operator bool() const {
+    return *this != cbitptr();
+  }
+
+  bool operator * () const {
+    return ((*p) >> offset) & 1u; 
+  }
+
+  bool operator[](std::size_t i) const {
+    return *(*this + i);
+  }
+
+  cbitptr& operator ++ () {
+    return *this += 1;
+  }
+
+  cbitptr operator ++ (int) {
+    auto t = *this;
+    ++(*this);
+    return t;
+  }
+
+  cbitptr& operator --() {
+    return *this -= 1;
+  }
+
+  cbitptr operator -- (int) {
+    auto t = *this;
+    --(*this);
+    return *this;
+  }
+
+  friend cbitptr operator + (cbitptr const& a, int n) {
+    auto t = a;
+    t += n;
+    return t;
+  }
+
+  friend cbitptr operator - (cbitptr const& a, int n) {
+    return a + (-n);
+  }
+
+  friend std::size_t operator - (cbitptr const& a, cbitptr const& b) {
+    return (a.p - b.p) * 8 + (a.offset - b.offset);
+  }
+};
+
 
 const auto startcode = {0,0,1};
 
@@ -171,46 +278,10 @@ private:
 struct MemStream {
   std::uint8_t const* first;
   std::uint8_t const* second;
+
+  friend std::uint8_t const* get_pos(MemStream const& r) { return r.first; }
 };
 
-template<typename Source, typename Buf>
-struct AsyncStream {
-  template<typename T, typename B>
-  AsyncStream(T&& t, B&& b) : state_(std::make_shared<std::pair<Source, Buffer<Buf>>>(std::forward<T>(t), Buffer<Buf>(std::forward<B>(b)))) {}
-
-  template<typename C>
-  friend void async_read_nalu(AsyncStream&& s, C cb) {
-    if(s.state_->second.size() > startcode.size()) {
-      auto e = std::search(s.state_->second.begin() + startcode.size(), s.state_->second.end(), startcode.begin(), startcode.end());
-      if(e != s.state_->second.end())
-        cb(std::move(s), MemStream{&*s.state_->second.begin(), &*e}, std::error_code());
-    }
-    else {
-      auto state = std::move(s.state_);
-
-      if(state->second.free() < 4096) state->second.clear_garbage();
-
-      state->first.async_read_some(asio::buffer(&*state->second.free_begin(), state->second.free()), [=](std::error_code ec, std::size_t bytes) {
-        if(ec) {
-          cb(AsyncStream{std::move(s)}, MemStream{nullptr, nullptr}, ec);
-          return;
-        }
-
-        state->second.advance_end(bytes);
-
-        async_read_nalu(AsyncStream{std::move(state)}, std::move(cb));
-      });
-    }
-  }
-//private:
-  AsyncStream(std::shared_ptr<std::pair<Source, Buffer<Buf>>> state) : state_(state) {}
-  std::shared_ptr<std::pair<Source, Buffer<Buf>>> state_;
-};
-
-template<typename S, typename B>
-auto make_async_stream(S&& src, B&& buf) -> AsyncStream<typename std::decay<S>::type, typename std::decay<B>::type> {
-  return AsyncStream<typename std::decay<S>::type, typename std::decay<B>::type>(std::forward<S>(src), std::forward<B>(buf));
-}
 
 template<typename A>
 struct RemoveStartCodeEmulationPrevention {
@@ -228,6 +299,8 @@ struct RemoveStartCodeEmulationPrevention {
   
     return b;
   }
+
+  friend std::uint8_t const* get_pos(RemoveStartCodeEmulationPrevention const& r) { return get_pos(r.a_); }
 
   A a_;
   std::uint32_t acc_ = -1u;
@@ -294,6 +367,9 @@ struct RBSP {
     while(available_bits() < n) read_byte();
     return acc_ >> (32 - n);
   }
+
+  friend 
+  cbitptr get_pos(RBSP const& r) { return {get_pos(r.a_), int(r.available_bits())}; }
 
 //private:
   unsigned available_bits() const { return 32 - unused_bits_; }
@@ -381,7 +457,10 @@ template<typename A>
 inline
 MemStream read_nalu(Stream<A>& s) {
   auto scode= {0u,0u,1u};
+
   if(!search(s, {0,0,1})) throw std::runtime_error("can't find startcode in the stream");
+  if(is_at_startcode(s)) advance(s, 3);
+
   auto e = std::search(s.gptr_ + 3, s.egptr_, std::begin(scode), std::end(scode));
   for(std::size_t n = 4096;s && e == s.egptr_; n += std::min(n, std::size_t(32*1024u))) {
     s.make_avail(n);
