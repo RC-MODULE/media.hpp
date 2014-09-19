@@ -35,6 +35,11 @@ enum class coding_type {
 
 enum class picture_type { frame, top, bot };
 
+inline bool has_top(picture_type p) { return p != picture_type::bot; }
+inline bool has_bot(picture_type p) { return p != picture_type::top; }
+
+inline picture_type opposite(picture_type pt) { return pt == picture_type::bot ? picture_type::top : picture_type::bot; }
+
 struct nal_unit_header {
   std::uint8_t nal_ref_idc;
   std::uint8_t nal_unit_type;
@@ -107,6 +112,8 @@ inline unsigned ChromaArrayType(seq_parameter_set const& sps) {
   return sps.separate_colour_plane_flag == 0 ? sps.chroma_format_idc : 0;
 } 
 
+inline unsigned MaxFrameNum(seq_parameter_set const& sps) { return 1 << (sps.log2_max_frame_num_minus4 + 4); }
+
 struct pic_parameter_set {
   unsigned  pic_parameter_set_id = -1u;
   unsigned  seq_parameter_set_id;
@@ -145,6 +152,14 @@ struct memory_management_control_operation {
   };
 };
 
+struct ref_pic_list_modification_operation {
+  unsigned id;
+  union {
+    unsigned abs_diff_pic_num_minus1;
+    unsigned long_term_pic_num;
+  };
+};
+
 struct slice_header {
   bool IdrPicFlag;
   unsigned nal_ref_idc;
@@ -172,7 +187,7 @@ struct slice_header {
   unsigned num_ref_idx_l0_active_minus1;
   unsigned num_ref_idx_l1_active_minus1;
 
-  std::vector<std::pair<unsigned, unsigned>> ref_pic_list_modification[2];
+  std::vector<ref_pic_list_modification_operation> ref_pic_list_modification[2];
 
   unsigned luma_log2_weight_denom = 0;
   unsigned chroma_log2_weight_denom = 0;
@@ -218,6 +233,14 @@ struct parsing_context {
     static const utils::optional<pic_parameter_set> dummy;
     if(n < pparams.size()) return pparams[n];
     return dummy;
+  }
+  utils::optional<seq_parameter_set> const& sps_by_pps_id(unsigned n) const {
+    auto s = pps(n);
+    if(s) return sps(s->seq_parameter_set_id);
+    return sps(-1u);
+  }
+  utils::optional<seq_parameter_set> const& sps(slice_header const& s) const {
+    return sps_by_pps_id(s.pic_parameter_set_id);
   }
 
   friend void add(parsing_context& cx, seq_parameter_set v) {
@@ -469,8 +492,7 @@ utils::optional<slice_header> parse_slice_header(parsing_context const& cx, Pars
     }
   }
 
-  auto ref_pic_list_modification = [&](std::vector<std::pair<unsigned, unsigned>>& ops) {
-    ops.clear();
+  auto ref_pic_list_modification = [&](std::vector<ref_pic_list_modification_operation>& ops) {
     for(;;) {
       auto modification_of_pic_nums_idc = ue(a);
       if(modification_of_pic_nums_idc == 3) break;
@@ -564,7 +586,7 @@ utils::optional<slice_header> parse_slice_header(parsing_context const& cx, Pars
   }
   return slice;
 }
- 
+
 }
 
 #endif
