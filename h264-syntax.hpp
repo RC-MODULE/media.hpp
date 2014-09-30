@@ -193,19 +193,12 @@ struct slice_header {
   unsigned chroma_log2_weight_denom = 0;
 
   struct weight_pred_table_element {
-    std::int8_t weight;
-    std::int8_t offset;
+    struct {
+      std::int8_t weight;
+      std::int8_t offset;
+    } luma, cb, cr;
   };
-
-  struct chroma_weight_pred_table_element {
-    weight_pred_table_element cb;
-    weight_pred_table_element cr;
-  };
-
-  struct {
-    std::vector<weight_pred_table_element> luma;
-    std::vector<chroma_weight_pred_table_element> chroma;
-  } weight_pred_table[2];
+  std::vector<weight_pred_table_element> weight_pred_table[2];
 
   bool no_output_of_prior_pics_flag = false;
   bool long_term_reference_flag = false;
@@ -241,6 +234,9 @@ struct parsing_context {
   }
   utils::optional<seq_parameter_set> const& sps(slice_header const& s) const {
     return sps_by_pps_id(s.pic_parameter_set_id);
+  }
+  utils::optional<pic_parameter_set> const& pps(slice_header const& s) const {
+    return pps(s.pic_parameter_set_id);
   }
 
   friend void add(parsing_context& cx, seq_parameter_set v) {
@@ -518,27 +514,26 @@ utils::optional<slice_header> parse_slice_header(parsing_context const& cx, Pars
       slice.chroma_log2_weight_denom = ue(a);
 
     auto read_weight_pred_table = [&](int n, decltype(slice.weight_pred_table[0])& wt) {
-      wt.luma.resize(n);
-      if(ChromaArrayType(sps) != 0) wt.chroma.resize(n);
-
+      wt.resize(n);
+      
       for(int i = 0; i != n; ++i) {
-        wt.luma[i].weight = 1 << slice.luma_log2_weight_denom;
-        wt.luma[i].offset = 0;
+        wt[i].luma.weight = 1 << slice.luma_log2_weight_denom;
+        wt[i].luma.offset = 0;
 
         if(u(a,1)) {
-          wt.luma[i].weight = se(a);
-          wt.luma[i].offset = se(a);
+          wt[i].luma.weight = se(a);
+          wt[i].luma.offset = se(a);
         }
         
         if(ChromaArrayType(sps) != 0) {
-          wt.chroma[i].cb.weight = wt.chroma[i].cr.weight = 1 << slice.chroma_log2_weight_denom;
-          wt.chroma[i].cb.offset = wt.chroma[i].cr.offset = 0;
+          wt[i].cb.weight = wt[i].cr.weight = 1 << slice.chroma_log2_weight_denom;
+          wt[i].cb.offset = wt[i].cr.offset = 0;
   
           if(u(a,1)) {
-            wt.chroma[i].cb.weight = se(a);
-            wt.chroma[i].cb.offset = se(a);
-            wt.chroma[i].cr.weight = se(a);
-            wt.chroma[i].cr.offset = se(a);
+            wt[i].cb.weight = se(a);
+            wt[i].cb.offset = se(a);
+            wt[i].cr.weight = se(a);
+            wt[i].cr.offset = se(a);
           }
         }
       }
@@ -585,6 +580,10 @@ utils::optional<slice_header> parse_slice_header(parsing_context const& cx, Pars
     }
   }
   return slice;
+}
+
+inline bool has_mmco5(slice_header const& s) {
+  return std::any_of(s.mmcos.begin(), s.mmcos.end(), [](memory_management_control_operation const& o) { return o.id == 5; });
 }
 
 }

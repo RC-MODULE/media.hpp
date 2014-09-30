@@ -369,7 +369,8 @@ struct RBSP {
   }
 
   friend 
-  cbitptr get_pos(RBSP const& r) { return {get_pos(r.a_), int(r.available_bits())}; }
+  //cbitptr get_pos(RBSP const& r) { return cbitptr{get_pos(r.a_) - ((r.available_bits() + 7) / 8), (r.available_bits() % 8) ? (8 - (r.available_bits() % 8)) : 0}; }
+  cbitptr get_pos(RBSP const& r) { return cbitptr(get_pos(r.a_), -r.available_bits()); }
 
 //private:
   unsigned available_bits() const { return 32 - unused_bits_; }

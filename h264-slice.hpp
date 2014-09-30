@@ -248,6 +248,7 @@ struct picture_reference {
   }
 
   friend unsigned FrameNum(picture_reference const& p) { return FrameNum(*p.frame); }
+  friend void FrameNum(picture_reference const& p, unsigned frame_num) { FrameNum(*p.frame, frame_num); }
   friend unsigned LongTermFrameIdx(picture_reference const& p) { return LongTermFrameIdx(*p.frame); }
   friend picture_type pic_type(picture_reference const& p) { return p.pt; }
 
@@ -508,8 +509,8 @@ template<typename C, typename I>
 void dec_ref_pic_marking_sliding_window(unsigned max_num_ref_frames, C& curr_pic, I begin, I end) {
   int numShortTerm = 0, numLongTerm = 0;
   for(auto b = begin, e = end; b != e; ++b) {
-    if((pic_type(curr_pic) == picture_type::top && is_short_term_reference(bot(*b)) && FrameNum(bot(*b)) == FrameNum(curr_pic))
-      || (pic_type(curr_pic) == picture_type::bot && is_short_term_reference(top(*b)) && FrameNum(top(*b)) == FrameNum(curr_pic)))
+    if((pic_type(curr_pic) == picture_type::top && is_short_term_reference(bot(*b)) && FrameNum(*b) == FrameNum(curr_pic))
+      || (pic_type(curr_pic) == picture_type::bot && is_short_term_reference(top(*b)) && FrameNum(*b) == FrameNum(curr_pic)))
       continue;
 
     if(is_short_term_reference(*b) || is_short_term_reference(top(*b)) || is_short_term_reference(bot(*b))) ++numShortTerm;

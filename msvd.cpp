@@ -4,6 +4,8 @@
 
 namespace msvd {
 
+using utils::operator "" _bf;
+
 enum status : std::uint32_t {
   mvde_cmd_rdy = 1 << 0, 
   mvde_pic_rdy = 1 << 1,
@@ -49,7 +51,21 @@ enum class mvde_cmd : std::uint32_t {
   release_bus_transfers = 7
 };
 
-struct ref_pic_info_tbl_t {
+struct rpi_tbl {
+  static constexpr auto ref_pic_id_to_ref_idx_l0 = 0.5_bf;
+  static constexpr auto ref_pic_id_l1            = 5.5_bf;
+  static constexpr auto frame_idx_l1             = 10.5_bf;
+  static constexpr auto ref_structure_l1         = 15.2_bf;
+  static constexpr auto long_term_ref_l1         = 17.1_bf;
+  static constexpr auto ref_pic_id_l0            = 18.5_bf;
+  static constexpr auto frame_idx_l0             = 23.5_bf;
+  static constexpr auto ref_structure_l0         = 28.2_bf;
+  static constexpr auto long_term_ref_l0         = 30.1_bf;
+ 
+  std::uint32_t d[32];
+};
+
+struct cnt_tbl_lx {
   std::uint32_t d[32];
 };
 
@@ -57,7 +73,7 @@ struct weighted_pred_tables {
   struct {
     std::uint32_t luma[16];
     std::uint32_t chroma[32];
-  } offs[2];
+  } list[2];
   
   struct {
     std::uint32_t luma;
@@ -198,8 +214,8 @@ struct register_map {
   uint32_t vdsi_fifo_dma_ad; // DMA address configuration (rw) MSVD_BASE + 0x10894
   uint32_t _notused_7 [(0x10900-0x10898)/4]; // gap in address space
   
-  ref_pic_info_tbl_t ref_pic_info_tbl;
-  std::uint32_t cnt_tbl_l[2][32];
+  rpi_tbl ref_pic_info_tbl;
+  cnt_tbl_lx cnt_tbl_l[2];
 
   weighted_pred_tables wt;
 
@@ -242,7 +258,7 @@ std::ostream& operator << (std::ostream& os, mpeg::picture_coding t) {
 }
  
 std::ostream& operator << (std::ostream& os, mpeg::picture_header_t const& ph) {
-  return std::cout <<  "{"
+  return os <<  "{"
     << "\n\ttemporal_reference:" << ph.temporal_reference
     << "\n\tpicture_coding_type:" << ph.picture_coding_type
     << "\n\tvbv_delay:" << ph.vbv_delay
@@ -254,7 +270,7 @@ std::ostream& operator << (std::ostream& os, mpeg::picture_header_t const& ph) {
 }
 
 std::ostream& operator << (std::ostream& os, mpeg::picture_coding_extension_t const& pcx) {
-  return std::cout << "{"
+  return os << "{"
     << "\n\tf_code: {" << pcx.f_code[0][0] << "," << pcx.f_code[0][1] << "," << pcx.f_code[1][0] << "," << pcx.f_code[1][1] << "}"
     << "\n\tintra_dc_precision:" << pcx.intra_dc_precision 
     << "\n\tpicture_structure:" << pcx.picture_structure 
@@ -276,9 +292,10 @@ std::ostream& operator << (std::ostream& os, mpeg::picture_coding_extension_t co
     << "\n}";
 }
 
-std::ostream& dump_buffer64(std::ostream& is, utils::range<volatile std::uint64_t*> r) {
+std::ostream& dump_buffer64(std::ostream& os, utils::range<volatile std::uint64_t*> r) {
   for(auto i = begin(r); i != end(r);++i)
-    std::cout << std::uint32_t(i) << " " << std::hex << std::setw(16) << std::setfill('0') << *i << std::endl;
+    os << std::uint32_t(i) << " " << std::hex << std::setw(16) << std::setfill('0') << *i << std::endl;
+  return os;
 }
 
 
@@ -324,6 +341,66 @@ std::ostream& dump_stats_regs(std::ostream& os, register_map volatile* regs) {
   ;
 }
 
+std::ostream& dump_vdsi_regs(std::ostream& os, register_map volatile* regs) {
+  os << std::hex 
+  	<< "vdsi_cmd:" << std::uint32_t(regs->vdsi_cmd) << std::endl
+  	<< "vdsi_stat:" << regs->vdsi_stat << std::endl
+  	<< "vdsi_error_stat:" << regs->vdsi_error_stat << std::endl
+  	<< "vdsi_cfg:" << regs->vdsi_cfg << std::endl
+  	<< "vdsi_dma_list0_ad:" << regs->vdsi_dma_list0_ad << std::endl
+  	<< "vdsi_dma_list1_ad:" << regs->vdsi_dma_list1_ad << std::endl
+  	<< "vdsi_dma_list2_ad:" << regs->vdsi_dma_list2_ad << std::endl
+  	<< "vdsi_conceal_cfg:" << regs->vdsi_conceal_cfg << std::endl
+  	<< "vdsi_conceal_cnt:" << regs->vdsi_conceal_cnt << std::endl
+  	<< "vdsi_mod_stat:" << regs->vdsi_mod_stat << std::endl
+  	<< "vdsi_param_1:" << regs->vdsi_param_1 << std::endl
+  	<< "vdsi_param_2:" << regs->vdsi_param_2 << std::endl
+  	<< "vdsi_param_3:" << regs->vdsi_param_3 << std::endl
+  	<< "vdsi_param_4:" << regs->vdsi_param_4 << std::endl
+  	<< "vdsi_param_5:" << regs->vdsi_param_5 << std::endl
+  	<< "vdsi_param_6:" << regs->vdsi_param_6 << std::endl
+  	<< "vdsi_param_7:" << regs->vdsi_param_7 << std::endl
+  	<< "vdsi_param_8:" << regs->vdsi_param_8 << std::endl
+  	<< "vdsi_param_9:" << regs->vdsi_param_9 << std::endl
+  	<< "vdsi_param_10:" << regs->vdsi_param_10 << std::endl
+  	<< "vdsi_param_11:" << regs->vdsi_param_11 << std::endl
+  	<< "vdsi_param_12:" << regs->vdsi_param_12 << std::endl
+  	<< "vdsi_pe_nsuma_ba:" << regs->vdsi_pe_nsuma_ba << std::endl
+  	<< "vdsi_bpma_ba:" << regs->vdsi_bpma_ba << std::endl
+  	<< "vdsi_su_nsuma_ba:" << regs->vdsi_su_nsuma_ba << std::endl
+  	<< "vdsi_psuma_rd_top_ba:" << regs->vdsi_psuma_rd_top_ba << std::endl
+  	<< "vdsi_psuma_rd_bot_ba:" << regs->vdsi_psuma_rd_bot_ba << std::endl
+  	<< "vdsi_psuma_wr_top_ba:" << regs->vdsi_psuma_wr_top_ba << std::endl
+  	<< "vdsi_psuma_wr_bot_ba:" << regs->vdsi_psuma_wr_bot_ba << std::endl
+  	<< "vdsi_fifo_error:" << regs->vdsi_fifo_error << std::endl
+  	<< "vdsi_fifo_fill_level:" << regs->vdsi_fifo_fill_level << std::endl
+  	<< "vdsi_fifo_dma_stat:" << regs->vdsi_fifo_dma_stat << std::endl
+  	<< "vdsi_fifo_clear:" << regs->vdsi_fifo_clear << std::endl
+  	<< "vdsi_fifo_mb_ctxt:" << regs->vdsi_fifo_mb_ctxt << std::endl
+  	<< "vdsi_fifo_mv:" << regs->vdsi_fifo_mv << std::endl
+  	<< "vdsi_fifo_coeff:" << regs->vdsi_fifo_coeff << std::endl
+  	<< "vdsi_fifo_dma_cmd:" << regs->vdsi_fifo_dma_cmd << std::endl
+  	<< "vdsi_fifo_dma_ad:" << regs->vdsi_fifo_dma_ad << std::endl;
+
+  
+  for(int i = 0; i != 32; ++i)
+    os << "rpi_tbl[" << i << "]" << regs->ref_pic_info_tbl.d[i] << std::endl;
+  
+  for(int k = 0; k != 2; ++k) 
+  for(int i = 0; i != 32; ++i)
+    os << "cnt_tbl_l" << k << "[" << i << "]:" << regs->cnt_tbl_l[k].d[i] << std::endl;
+ 
+  for(int k = 0; k != 2; ++k) {
+    for(int i = 0; i != 16; ++i) 
+      os << "weight_luma[" << k << "][" << i << "]:" << regs->wt.list[k].luma[i] << std::endl;  
+    for(int i = 0; i != 32; ++i) 
+      os << "weight_chroma[" << k << "][" << i << "]:" << regs->wt.list[k].chroma[i] << std::endl;  
+    
+    os << "flags[" << k << "]:{luma:" << regs->wt.flags[k].luma << ",croma:" << regs->wt.flags[k].chroma << "}" << std::endl; 
+  }
+
+  return os;
+}
 
 struct device::device_impl {
   asio::posix::stream_descriptor fd;
@@ -335,15 +412,22 @@ struct device::device_impl {
 
   std::uint32_t intmem_phys;
   std::uint32_t extmem_phys;
+
+  std::array<std::uint32_t, 32> frame_id_to_buffer;
 };
 
 device::~device() {
   if(p) delete p;
 }
 
+asio::io_service& get_io_service(device& d) { return d.impl()->fd.get_io_service(); }
+
 register_map volatile* regs(device& d) {
   return reinterpret_cast<register_map*>(d.impl()->regs);
 }
+
+std::uint32_t extmem_phys(device& d) { return d.impl()->extmem_phys; }
+std::uint32_t intmem_phys(device& d) { return d.impl()->intmem_phys; }
 
 auto wait_for_interrupt = [](device d) {
   static std::uint32_t status;
@@ -475,9 +559,7 @@ inline std::uint32_t psuma_buffer_bot(device& d, mpeg::sequence_header_t const& 
   return psuma_buffer_top(d,sh) + psuma_buffer_size(sh)/2;
 }
 
-using utils::operator "" _bf;
-
-unsigned coding_type(mpeg::picture_coding pt) {
+unsigned to_coding_type(mpeg::picture_coding pt) {
   using namespace mpeg;
   return pt == picture_coding::I ? 1 : (pt == picture_coding::P ? 2 : 3);
 }
@@ -507,7 +589,15 @@ enum {
 
 enum load_table_sel {
   w_intra_8x8 = 1, 
-  w_inter_8x8 = 2
+  w_inter_8x8 = 2,
+  si_8x8_intra_y = 1,
+  si_8x8_inter_y = 2,
+  si_4x4_intra_y = 4,
+  si_4x4_inter_y = 8,
+  si_4x4_intra_cb = 16,
+  si_4x4_inter_cb = 32,
+  si_4x4_intra_cr = 64,
+  si_4x4_inter_cr = 128
 };
 
 enum address_sel {
@@ -527,32 +617,101 @@ enum address_sel {
   lf_frame_store_c_ba = 0x47
 };
 
-std::uint32_t ct_ba_element(std::uint32_t base, address_sel sel, bool last = 0) {
+std::uint32_t ct_ba_element(std::uint32_t base, /*address_sel*/int sel, bool last = 0) {
   return set(10.22_bf, base/(1 << 10)) | set(9.1_bf, last) | set(0.7_bf, sel);
 }
 
 struct ct_info {
   //word0
-  static constexpr auto structure =     0.2_bf;
-  static constexpr auto coding_type =   2.2_bf;
-  static constexpr auto vert_pic_size = 4.8_bf;
-  static constexpr auto hor_pic_size =  12.8_bf;
+  static constexpr auto structure =               0.2_bf;
+  static constexpr auto coding_type =             2.2_bf;
+  static constexpr auto vert_pic_size =           4.8_bf;
+  static constexpr auto hor_pic_size =            12.8_bf;
+  static constexpr auto mb_mode =                 20.3_bf;
+  static constexpr auto mbaff_frame_flag =        23.1_bf;
+  static constexpr auto constr_intra_pred_flag =  25.1_bf;
+  static constexpr auto ipred_mode =              26.1_bf;
 
   //word1
-  static constexpr auto pred_mode =     0.2_bf;
-  static constexpr auto iq_wt_en =      4.1_bf;
-  static constexpr auto iq_sat_en =     6.1_bf;
-  static constexpr auto iq_div3 =       8.3_bf;
-  static constexpr auto iq_div_ctrl =   11.1_bf;
-  static constexpr auto def_dc_ctrl =   12.2_bf;
-  static constexpr auto iq_table_mask = 14.4_bf;
-  static constexpr auto mc_mode =       18.3_bf;
-  static constexpr auto scan_mode =     22.6_bf;
+  static constexpr auto pred_mode =               0.2_bf;
+  static constexpr auto trans_mode =              2.2_bf;
+  static constexpr auto iq_wt_en =                4.1_bf;
+  static constexpr auto iq_scale_en =             5.1_bf;
+  static constexpr auto iq_sat_en =               6.1_bf;
+  static constexpr auto iq_nadj_en =              7.1_bf;
+  static constexpr auto iq_div3 =                 8.3_bf;
+  static constexpr auto iq_div_ctrl =             11.1_bf;
+  static constexpr auto def_dc_ctrl =             12.2_bf;
+  static constexpr auto iq_table_mask =           14.4_bf;
+  static constexpr auto mc_mode =                 18.3_bf;
+  static constexpr auto scan_mode =               22.6_bf;
+
+  //word2
+  static constexpr auto weight_mode =             0.2_bf;
 
   //word6
-  static constexpr auto lf_mode =       13.3_bf; 
-  static constexpr auto os_mode =       16.3_bf;
-  static constexpr auto hor_fbuf_size = 19.8_bf;
+  static constexpr auto lf_mode =                 13.3_bf; 
+  static constexpr auto os_mode =                 16.3_bf;
+  static constexpr auto hor_fbuf_size =           19.8_bf;
+
+  std::uint32_t data[7] = {0,0,0,0,0,0,0};
+
+  ct_info(mpeg::sequence_header_t const& sh,
+          mpeg::picture_header_t const& ph,
+          mpeg::picture_coding_extension_t const* pcx,
+          buffer_geometry const& geometry) 
+  {
+    data[0] = 0 
+      | set(structure,      pcx ? pcx->picture_structure : 3)
+      | set(coding_type,    to_coding_type(ph.picture_coding_type))
+      | set(vert_pic_size,  ver_pic_size_in_mbs(sh))
+      | set(hor_pic_size,   hor_pic_size_in_mbs(sh));
+    data[1] = 0
+      | set(pred_mode,      1)
+      | set(iq_wt_en,       1)
+      | set(iq_sat_en,      1)
+      | set(iq_div3,        pcx ? 5 : 4)
+      | set(iq_div_ctrl,    1)
+      | set(def_dc_ctrl,    pcx ? pcx->intra_dc_precision : 0)
+      | set(iq_table_mask,  0xE)
+      | set(mc_mode,        pcx ? 1 : 0)
+      | set(scan_mode,      pcx && pcx->alternate_scan ? 3 : 2);
+    data[2] = 0;
+    data[3] = 0;
+    data[4] = 0;
+    data[5] = 0;
+    data[6] = 0 
+      | set(lf_mode,        3)
+      | set(os_mode,        3)
+      | set(hor_fbuf_size,  geometry.width / 16);
+  } 
+
+  ct_info(h264_decode_params const& params, buffer_geometry const& geometry)
+  {
+    data[0] = 0
+      | set(structure,              static_cast<std::uint32_t>(params.pic_type))
+      | set(coding_type,            static_cast<std::uint32_t>(params.slice_type))
+      | set(vert_pic_size,          params.vert_pic_size_in_mbs / (2 - (params.pic_type == msvd::structure::frame)))
+      | set(hor_pic_size,           params.hor_pic_size_in_mbs)
+      | set(mb_mode,                params.mb_mode)
+      | set(mbaff_frame_flag,       params.mbaff_frame_flag && params.pic_type == msvd::structure::frame)
+      | set(constr_intra_pred_flag, params.constr_intra_pred_flag)
+      | set(ipred_mode,             1);
+    data[1] = 0
+      | set(trans_mode,             2)
+      | set(iq_wt_en,               1)
+      | set(iq_scale_en,            1)
+      | set(iq_nadj_en,             1)
+      | set(mc_mode,                3);
+    data[2] = 0
+      | set(weight_mode,            params.weight_mode);
+    data[3] = 0;
+    data[4] = 0;
+    data[5] = 0;
+    data[6] = 0
+      | set(os_mode,        3)
+      | set(hor_fbuf_size,  geometry.width / 16);
+  }
 };
 
 struct mpeg_si_info {
@@ -604,7 +763,7 @@ void config_sr1(device& d, std::uint8_t* start, int offset, std::uint8_t* end) {
   r->vdsr1_search_range   = 0x100000;
   r->vdsr1_search_pattern_1 = 0x00000100;
   r->vdsr1_search_mask_1  = 0xFFFFFF00;
-  r->vdsr1_cfg            = 0x07;
+  r->vdsr1_cfg            = 0x26;
   r->vdsr1_str_buf_ba     = d.impl()->buf_phys;
   r->vdsr1_str_buf_size   = 2*1024*1024;
   r->vdsr1_str_buf_blen   = 1024*1024;
@@ -614,13 +773,14 @@ void config_sr1(device& d, std::uint8_t* start, int offset, std::uint8_t* end) {
 
   __sync_synchronize();
 
-  r->vdsr1_cmd = 6; // continue;
+  r->vdsr1_cmd = 6; // load_sr_buffer;
 
   //dump_sr1_regs(std::cout, r);
 }
 
 static auto start_decode = [](device d) {
-  regs(d)->vd_imsc = mvde_proc_err | mvde_last_mb_rdy | si_parse_err | sr1_si_access_failed; 
+  regs(d)->vd_ris = 0;
+  regs(d)->vd_imsc = si_data_err | mvde_proc_err | mvde_last_mb_rdy | si_parse_err | sr1_si_access_failed; 
   regs(d)->vdsi_cmd = si_cmd::decode_until_return_point;
 
   auto timer = std::make_shared<asio::system_timer>(d.impl()->fd.get_io_service());
@@ -638,8 +798,9 @@ static auto start_decode = [](device d) {
   return 
     wait_for_interrupt(std::move(d))
     >> 
-    [timer](device d, std::uint32_t status) {
+    [timer, r](device d, std::uint32_t status) {
       timer->cancel();
+      std::cout << "status:" << status << std::endl;
       if(!(status & mvde_last_mb_rdy)) {
         dump_stats_regs(std::cout, regs(d)); 
         dump_sr1_regs(std::cout, regs(d));
@@ -660,11 +821,6 @@ void configure(device& d,
 {
   std::uint32_t volatile* cfg = regs(d)->vdsi_cfg_data, *start = cfg;
 
-//  std::cout << "cfg:" << std::hex << ((std::uint8_t*)cfg - (std::uint8_t*)regs(d)) << std::endl;
-//  std::cout << geometry << std::endl;
-//  std::cout << ph << std::endl;
-//  if(pcx) std::cout << *pcx << std::endl;
- 
   *cfg++ = set(ct_hdr::always_1, 1) | set(ct_hdr::ctxt_type, CT_BA);
   
   if(ph.picture_coding_type == mpeg::picture_coding::B) std::swap(refpic1, refpic2);
@@ -686,30 +842,8 @@ void configure(device& d,
 
   start = cfg;
   *cfg++ = set(ct_hdr::always_1, 1) | set(ct_hdr::ctxt_type, CT_INFO);
-  *cfg++ = 0
-    | set(ct_info::structure,     pcx ? pcx->picture_structure : 3)
-    | set(ct_info::coding_type,   coding_type(ph.picture_coding_type))
-    | set(ct_info::vert_pic_size, ver_pic_size_in_mbs(sh))
-    | set(ct_info::hor_pic_size,  hor_pic_size_in_mbs(sh));
-  *cfg++ = 0
-    | set(ct_info::pred_mode,     1)
-    | set(ct_info::iq_wt_en,      1)
-    | set(ct_info::iq_sat_en,     1)
-    | set(ct_info::iq_div3,       pcx ? 5 : 4)
-    | set(ct_info::iq_div_ctrl,   1)
-    | set(ct_info::def_dc_ctrl,   pcx ? pcx->intra_dc_precision : 0)
-    | set(ct_info::iq_table_mask, 0xE)
-    | set(ct_info::mc_mode,       pcx ? 1 : 0)
-    | set(ct_info::scan_mode,     pcx && pcx->alternate_scan ? 3 : 2);
-  *cfg++ = 0;
-  *cfg++ = 0;
-  *cfg++ = 0;
-  *cfg++ = 0;
-  *cfg++ = 0 
-    | set(ct_info::lf_mode, 3)
-    | set(ct_info::os_mode, 3)
-    | set(ct_info::hor_fbuf_size, geometry.width / 16);
-
+  ct_info ct_info_data{sh, ph, pcx, geometry};
+  cfg = std::copy(std::begin(ct_info_data.data), std::end(ct_info_data.data), cfg);
   auto ct_info = utils::make_range(start, cfg);
 
   start = cfg; // ct_wt8 
@@ -725,9 +859,16 @@ void configure(device& d,
   for(int i = 0; i != 32; ++i)
     *cfg++ = sh.non_intra_quantiser_matrix[i*2] << 8 | sh.non_intra_quantiser_matrix[i*2+1] | (i == 31) << 30;
   auto ct_wt = utils::make_range(start, cfg);
- 
-  start = cfg; //si_info
-  *cfg++ = 0
+
+  start = cfg;
+  cfg = dma_element(cfg, d, ct_ba);
+  cfg = dma_element(cfg, d, utils::make_range(begin(ct_wt), begin(ct_wt)+1));
+  cfg = dma_element_coeff(cfg, d, utils::make_range(begin(ct_wt)+1, end(ct_wt)));
+  cfg = dma_element(cfg, d, ct_info, true);
+  auto dma = utils::make_range(start, cfg);
+  
+  //configuring si
+  regs(d)->vdsi_param_1 = 0
     | set(mpeg_si_info::decoding_mode,  pcx ? 2 : 1)
     | set(mpeg_si_info::progressive,    pcx && pcx->progressive_frame)
     | set(mpeg_si_info::mb_qp_luma,     pcx ? (1 << (3 - pcx->intra_dc_precision)) : 8)
@@ -738,43 +879,32 @@ void configure(device& d,
     | set(mpeg_si_info::concealment_vectors, pcx && pcx->concealment_motion_vectors)
     | set(mpeg_si_info::frame_pred_frame_dct, pcx && pcx->frame_pred_frame_dct);
 
-  *cfg++ = set(mpeg_si_info::intra_vlc_format, pcx && pcx->intra_vlc_format);
-  *cfg++ = 0
+  regs(d)->vdsi_param_2 = set(mpeg_si_info::intra_vlc_format, pcx && pcx->intra_vlc_format);
+  regs(d)->vdsi_param_3 = 0
     | set(mpeg_si_info::full_pel_forward_flag,  ph.full_pel_forward_vector)
     | set(mpeg_si_info::full_pel_backward_flag, ph.full_pel_backward_vector)
     | set(mpeg_si_info::q_scale_type,           pcx && pcx->q_scale_type)
     | set(mpeg_si_info::top_field_first,        pcx && pcx->top_field_first);
-  *cfg++ = 0;
-  auto si_info = utils::make_range(start, cfg);
 
-  start = cfg; //si_ba
-  *cfg++ = su_nsuma_buffer(d, sh);
-  *cfg++ = psuma_buffer_top(d, sh);
-  *cfg++ = psuma_buffer_bot(d, sh);
-  *cfg++ = psuma_buffer_top(d, sh);
-  *cfg++ = psuma_buffer_bot(d, sh);
-  auto si_ba = utils::make_range(start, cfg);
+  regs(d)->vdsi_param_6 = ct_info_data.data[0];
+  regs(d)->vdsi_param_7 = ct_info_data.data[1];
+  regs(d)->vdsi_param_8 = ct_info_data.data[2];
+  regs(d)->vdsi_param_9 = ct_info_data.data[3];
+  regs(d)->vdsi_param_10 = ct_info_data.data[4];
+  regs(d)->vdsi_param_11 = ct_info_data.data[5];
+  regs(d)->vdsi_param_12 = ct_info_data.data[6];
 
-  auto vdsi_cfg = cfg++;
-  *vdsi_cfg = 0x80;
+  regs(d)->vdsi_su_nsuma_ba     = su_nsuma_buffer(d, sh);
+  regs(d)->vdsi_psuma_rd_top_ba = psuma_buffer_top(d, sh); 
+  regs(d)->vdsi_psuma_rd_bot_ba = psuma_buffer_bot(d, sh);
+  regs(d)->vdsi_psuma_wr_top_ba = psuma_buffer_top(d, sh); 
+  regs(d)->vdsi_psuma_wr_bot_ba = psuma_buffer_bot(d, sh);
 
-  auto vdsi_conceal_cfg = cfg++;
-  *vdsi_conceal_cfg = 1 << 17;
-
-  start = cfg;
-  cfg = dma_element(cfg, d, &regs(d)->vdsi_param_1, si_info);
-  cfg = dma_element(cfg, d, &regs(d)->vdsi_param_6, utils::make_range(begin(ct_info)+1, end(ct_info)));
-  cfg = dma_element(cfg, d, &regs(d)->vdsi_cfg, utils::make_range(vdsi_cfg, vdsi_cfg+1));
-  cfg = dma_element(cfg, d, &regs(d)->vdsi_conceal_cfg, utils::make_range(vdsi_conceal_cfg, vdsi_conceal_cfg+1));
-  cfg = dma_element(cfg, d, &regs(d)->vdsi_su_nsuma_ba, si_ba, true);
-  regs(d)->vdsi_dma_list1_ad = set(dma_list::en, 1) | set(dma_list::ad, sizeof(std::uint32_t)*(start - regs(d)->vdsi_cfg_data));
-
-  start = cfg;
-  cfg = dma_element(cfg, d, ct_ba);
-  cfg = dma_element(cfg, d, utils::make_range(begin(ct_wt), begin(ct_wt)+1));
-  cfg = dma_element_coeff(cfg, d, utils::make_range(begin(ct_wt)+1, end(ct_wt)));
-  cfg = dma_element(cfg, d, ct_info, true);
-  regs(d)->vdsi_dma_list0_ad = set(dma_list::en, 1) | set(dma_list::ad, sizeof(std::uint32_t)*(start - regs(d)->vdsi_cfg_data));
+  regs(d)->vdsi_cfg = 0x80;
+  regs(d)->vdsi_conceal_cfg = 1 << 17;
+ 
+  regs(d)->vdsi_dma_list0_ad = set(dma_list::en, 1) | set(dma_list::ad, sizeof(std::uint32_t)*(begin(dma) - regs(d)->vdsi_cfg_data));
+  regs(d)->vdsi_dma_list1_ad = 0; 
 }
 
 void async_decode(
@@ -792,11 +922,320 @@ void async_decode(
   configure(d, sh, ph, pcx, geometry, curpic, refpic1, refpic2);
 
   auto buf_end = copy_swap(begin(picture_data), end(picture_data), reinterpret_cast<std::uint64_t*>(d.impl()->buf));
-  *buf_end++ = 0x0000010000000000ul;
-
   config_sr1(d, reinterpret_cast<std::uint8_t*>(d.impl()->buf), 0, reinterpret_cast<std::uint8_t*>(buf_end));
   
   start_decode(std::move(d)) += std::move(complete);
+}
+
+struct h264_buffer {
+  std::uint32_t buffer;
+  std::size_t frame_id;
+};
+
+h264_buffer transform_to_h264_buffer(device& d, std::uint32_t const* first_frame, std::uint32_t const* last_frame, std::uint32_t curr, h264_buffer* out) {
+  std::array<std::uint32_t, 32> frame_ids = {{}};
+
+  auto find = [&](std::uint32_t f) {
+    return std::find(d.impl()->frame_id_to_buffer.begin(), d.impl()->frame_id_to_buffer.end(), f) - d.impl()->frame_id_to_buffer.begin();
+  };
+
+  auto copy = [&](std::uint32_t f) -> std::size_t {
+    auto i = find(f);
+    if(i == 32) i = find(0);
+    frame_ids[i] = f;
+    return i;
+  };
+  
+  for(;first_frame != last_frame; first_frame++, out++)
+    *out = {*first_frame, copy(*first_frame)};
+
+  h264_buffer r = {curr, copy(curr)};
+
+  d.impl()->frame_id_to_buffer = frame_ids;
+
+  return r;
+}
+
+
+std::uint32_t mvde_ip_buffer(device& d, h264_decode_params const&) { return round_up(extmem_phys(d), 1024u); }
+std::uint32_t mvde_ip_buffer_size(h264_decode_params const& params) { return params.hor_pic_size_in_mbs*16*128; /*return (hor_pic_size_in_mbs(sps)+2)*64;*/ }
+
+std::uint32_t pe_nsuma_buffer(device& d, h264_decode_params const& params) { return round_up(intmem_phys(d), 16*1024u); }
+std::uint32_t pe_nsuma_buffer_size(h264_decode_params const& params) { return 2*16384; /*return params.hor_pic_size_in_mbs * 80;*/ } 
+std::uint32_t su_nsuma_buffer(device& d, h264_decode_params const& p) { return  round_up(pe_nsuma_buffer(d, p) + pe_nsuma_buffer_size(p), 16*1024u);}
+
+std::uint32_t mvde_lf_buffer(device& d, h264_decode_params const& p) { return round_up(su_nsuma_buffer(d, p) + 2*16384, 1024u); }
+std::uint32_t mvde_lf_buffer_size(h264_decode_params const& p) { return p.hor_pic_size_in_mbs*256; }
+
+inline std::uint32_t psuma_buffer_size(h264_decode_params const& p) {
+  return round_up(p.hor_pic_size_in_mbs*p.vert_pic_size_in_mbs*128u, 1024u);
+}
+
+inline std::uint32_t psuma_buffer_top(device& d, h264_decode_params const& p, h264_buffer const& pic) {
+  return round_up(mvde_ip_buffer(d, p) + mvde_ip_buffer_size(p), 1024u) + psuma_buffer_size(p)*pic.frame_id;
+}
+
+inline std::uint32_t psuma_buffer_bot(device& d, h264_decode_params const& p, h264_buffer const& pic) {
+  return psuma_buffer_top(d,p,pic) + psuma_buffer_size(p)/2;
+}
+
+struct h264_si_info {
+  //word0
+  static constexpr auto disable_deblocking_filter_idc = 0.2_bf;
+  static constexpr auto frame_mbs_only_flag           = 5_bf;
+  static constexpr auto slice_qpy                     = 8.6_bf;
+  static constexpr auto num_ref_idx_l0_minus1         = 14.5_bf;
+  static constexpr auto num_ref_idx_l1_minus1         = 19.5_bf;
+  static constexpr auto direct_8x8_inference_flag     = 27_bf;
+  static constexpr auto direct_spatial_mv_pred_flag   = 28_bf;
+  static constexpr auto transform_8x8_flag            = 29_bf;
+  static constexpr auto mb_adaptive_frame_field_flag  = 30_bf;
+  static constexpr auto h4_new_slice                  = 31_bf;
+
+  //word1
+  static constexpr auto first_mb_in_slice             = 0.14_bf;
+  static constexpr auto cabac_init_idc                = 14.2_bf;
+  static constexpr auto entropy_coding_mode           = 16_bf;
+
+  //word2
+  static constexpr auto chroma_qp_index_offset        = 0.5_bf;
+  static constexpr auto second_chroma_qp_index_offset = 5.5_bf;
+  static constexpr auto luma_log2_weight_denom        = 10.3_bf;
+  static constexpr auto chroma_log2_weight_denom      = 13.3_bf;
+  static constexpr auto col_pic_mode                  = 16.2_bf;
+  static constexpr auto col_abs_diff_poc_flag         = 18_bf;
+
+  //word3
+  static constexpr auto curr_bot_order_cnt            = 0.16_bf;
+  static constexpr auto curr_top_order_cnt            = 16.16_bf;
+};
+
+utils::range<std::uint32_t volatile*> configure_ct_ba(device& d, h264_decode_params const& params, std::uint32_t volatile*& cfg) {
+  std::size_t i = 0;
+  auto start = cfg;
+
+  *cfg++ = set(ct_hdr::always_1, 1) | set(ct_hdr::ctxt_type, CT_BA);
+ 
+  for(int i = 0; i < params.dpb.size(); ++i) {
+    *cfg++ = ct_ba_element(params.dpb[i] + params.geometry.luma_offset, frame_store_y_ba0 + i * 2);
+    *cfg++ = ct_ba_element(params.dpb[i] + params.geometry.chroma_offset, frame_store_c_ba0 + i * 2);
+  }
+  
+  *cfg++ = ct_ba_element(mvde_ip_buffer(d, params), ip_buf_ba);
+  *cfg++ = ct_ba_element(mvde_lf_buffer(d, params), lf_buf_ba);
+  *cfg++ = ct_ba_element(params.curr_pic + params.geometry.luma_offset, lf_frame_store_y_ba);
+  *cfg++ = ct_ba_element(params.curr_pic + params.geometry.chroma_offset, lf_frame_store_c_ba, true);
+
+  return utils::make_range(start, cfg);
+}
+
+utils::range<std::uint32_t volatile*> configure_ct_wt4(scaling_list_4x4_t const& list, std::uint32_t volatile*& cfg) {
+  auto start = cfg;
+
+  *cfg++ = 0
+    | set(ct_hdr::always_1, 1)
+    | set(ct_hdr::table_scan, 17) 
+    | set(ct_hdr::load_table_sel, si_4x4_intra_y |si_4x4_inter_y | si_4x4_intra_cb |si_4x4_inter_cb | si_4x4_intra_cr |si_4x4_inter_cr)
+    | set(ct_hdr::ctxt_type, CT_WT);
+
+  constexpr int scaling_map_4x4[] = {0, 3, 1, 4, 2, 5};
+  for(int i = 0; i != 6; ++i) {
+    auto& s =  list[scaling_map_4x4[i]];
+    for(int j = 0; j != 8; ++j)
+      *cfg++ = s[j*2] << 8 | s[j*2+1] |(j == 7) << 30;;
+  }
+  
+  return utils::make_range(start, cfg);
+}
+
+utils::range<std::uint32_t volatile*> configure_ct_wt8(scaling_list_8x8_t const& list, std::uint32_t volatile*& cfg) {
+  auto start = cfg;
+ 
+  *cfg++ = 0
+    | set(ct_hdr::always_1, 1)
+    | set(ct_hdr::table_scan, 16) 
+    | set(ct_hdr::load_table_sel, si_8x8_intra_y |si_8x8_inter_y)
+    | set(ct_hdr::ctxt_type, CT_WT);
+
+  for(int i = 0; i != 2; ++i) {
+    for(int j = 0; j != 32; ++j)
+      *cfg++ = list[i][j*2] << 8 | list[i][j*2+1] | (j == 31) << 30;
+  } 
+  return utils::make_range(start, cfg);
+}
+
+void configure_ref_pic_info_tbl(device& d, h264_decode_params const& params, h264_buffer const* dpb, volatile rpi_tbl& rpi) {
+  auto& reflists = params.reflist;
+
+  auto pic_id = [&](h264_pic_reference const& p) { return dpb[p.index].frame_id * 2 + (p.pt == structure::bot); };
+ 
+  std::fill(rpi.d, rpi.d + std::max(reflists[0].size(), reflists[1].size()), 0u);
+ 
+  for(auto& re: reflists[0])
+    rpi.d[re.pt == structure::frame ? dpb[re.index].frame_id : pic_id(re)] = set(rpi_tbl::ref_pic_id_to_ref_idx_l0, &re - begin(reflists[0]));
+
+  std::transform(begin(reflists[0]), end(reflists[0]), rpi.d, rpi.d, [&](h264_pic_reference const& p, std::uint32_t t) { return t 
+      | set(rpi_tbl::ref_pic_id_l0,     dpb[p.index].frame_id * 2 + (p.pt == structure::frame))
+      | set(rpi_tbl::frame_idx_l0,      p.index) 
+      | set(rpi_tbl::ref_structure_l0,  static_cast<int>(p.pt)) 
+      | set(rpi_tbl::long_term_ref_l0,  p.long_term);
+  });
+  std::transform(begin(reflists[1]), end(reflists[1]), rpi.d, rpi.d, [&](h264_pic_reference const& p, std::uint32_t t) { return t 
+      | set(rpi_tbl::ref_pic_id_l1,     dpb[p.index].frame_id * 2 + (p.pt == structure::frame))
+      | set(rpi_tbl::frame_idx_l1,      p.index) 
+      | set(rpi_tbl::ref_structure_l1,  static_cast<int>(p.pt))
+      | set(rpi_tbl::long_term_ref_l1,  p.long_term);
+  });
+}
+
+void configure_poc_table(utils::range<h264_pic_reference const*> const& list, volatile cnt_tbl_lx& tbl) {
+  for(auto i = 0; i < list.size(); ++i)
+    tbl.d[i] = set(16.16_bf, list[i].poc_top) | set(0.16_bf, list[i].poc_bot);
+}
+
+void configure_weighted_pred_tables(std::array<utils::range<h264_pic_reference const*>,2> const& reflists, volatile weighted_pred_tables& tables) {
+  for(std::size_t l = 0; l != 2; ++l) {
+    auto& list = reflists[l];
+    
+    for(std::size_t i = 0; i < reflists[l].size(); i += 2) {
+      std::uint32_t luma = set(24.8_bf, list[i].luma.weight) | set(16.8_bf, list[i].luma.offset);
+      if(i + 1 < list.size())
+        luma |= set(8.8_bf, list[i+1].luma.weight) | set(0.8_bf, list[i+1].luma.offset);
+      tables.list[l].luma[i/2] = luma;
+    }
+
+    std::transform(list.begin(), list.end(), tables.list[l].chroma, [&](h264_pic_reference const& r) {
+      return set(24.8_bf, r.cb.weight) | set(16.8_bf, r.cb.offset) | set(8.8_bf, r.cr.weight) | set(0.8_bf, r.cr.offset);
+    });
+
+    tables.flags[l].luma = tables.flags[l].chroma = (1 << list.size()) - 1;
+  }
+}
+
+void configure(device& d, h264_decode_params const& params)
+{
+  h264_buffer dpb[32] = {};
+  auto curr_pic = transform_to_h264_buffer(d, params.dpb.begin(), params.dpb.end(), params.curr_pic, dpb);
+ 
+  std::uint32_t volatile* cfg = regs(d)->vdsi_cfg_data, *start = cfg;
+
+  auto ct_ba = configure_ct_ba(d, params, cfg);
+
+  start = cfg;
+  *cfg++ = set(ct_hdr::always_1, 1) | set(ct_hdr::ctxt_type, CT_INFO);
+  ct_info ct_info_data{params, params.geometry};
+  cfg = std::copy(std::begin(ct_info_data.data), std::end(ct_info_data.data), cfg);
+  auto ct_info = utils::make_range(start, cfg);
+
+  auto ct_wt4 = configure_ct_wt4(params.scaling_list_4x4, cfg);
+  auto ct_wt8 = configure_ct_wt8(params.scaling_list_8x8, cfg);
+
+  start = cfg;
+  cfg = dma_element(cfg, d, ct_ba);
+  cfg = dma_element(cfg, d, utils::make_range(begin(ct_wt4), begin(ct_wt4)+1));
+  cfg = dma_element_coeff(cfg, d, utils::make_range(begin(ct_wt4)+1, end(ct_wt4)));
+  cfg = dma_element(cfg, d, utils::make_range(begin(ct_wt8), begin(ct_wt8)+1));
+  cfg = dma_element_coeff(cfg, d, utils::make_range(begin(ct_wt8)+1, end(ct_wt8)));
+  cfg = dma_element(cfg, d, ct_info, true);
+  auto dma = utils::make_range(start, cfg);
+
+  regs(d)->vdsi_param_1 = 0 
+    | set(h264_si_info::disable_deblocking_filter_idc,  params.disable_deblocking_filter_idc)
+    | set(h264_si_info::frame_mbs_only_flag,            params.frame_mbs_only_flag)
+    | set(h264_si_info::slice_qpy,                      params.slice_qpy)
+    | set(h264_si_info::num_ref_idx_l0_minus1,          params.reflist[0].size() ? params.reflist[0].size()-1 : 0)
+    | set(h264_si_info::num_ref_idx_l1_minus1,          params.reflist[1].size() ? params.reflist[1].size()-1 : 0)
+    | set(h264_si_info::direct_8x8_inference_flag,      params.direct_8x8_inference_flag)
+    | set(h264_si_info::direct_spatial_mv_pred_flag,    params.direct_spatial_mv_pred_flag)
+    | set(h264_si_info::transform_8x8_flag,             params.transform_8x8_mode_flag)
+    | set(h264_si_info::mb_adaptive_frame_field_flag,   params.mbaff_frame_flag)
+    | set(h264_si_info::h4_new_slice,                   1);
+
+  regs(d)->vdsi_param_2 = 0
+    | set(h264_si_info::first_mb_in_slice,              params.first_mb_in_slice)
+    | set(h264_si_info::cabac_init_idc,                 params.cabac_init_idc)
+    | set(h264_si_info::entropy_coding_mode,            params.entropy_coding_mode_flag);
+  
+   regs(d)->vdsi_param_3 = 0
+    | set(h264_si_info::chroma_qp_index_offset,         params.chroma_qp_index_offset)
+    | set(h264_si_info::second_chroma_qp_index_offset,  params.second_chroma_qp_index_offset)
+    | set(h264_si_info::luma_log2_weight_denom,         params.luma_log2_weight_denom)
+    | set(h264_si_info::chroma_log2_weight_denom,       params.chroma_log2_weight_denom)
+    | set(h264_si_info::col_pic_mode,                   static_cast<int>(params.col_pic_type))
+    | set(h264_si_info::col_abs_diff_poc_flag,          params.col_abs_diff_poc_flag);          
+  
+  regs(d)->vdsi_param_4 = 0
+    | set(h264_si_info::curr_top_order_cnt,             params.poc_top)
+    | set(h264_si_info::curr_bot_order_cnt,             params.poc_bot);
+  regs(d)->vdsi_param_5 = 0;
+
+  regs(d)->vdsi_param_6 = ct_info_data.data[0];
+  regs(d)->vdsi_param_7 = ct_info_data.data[1];
+  regs(d)->vdsi_param_8 = ct_info_data.data[2];
+  regs(d)->vdsi_param_9 = ct_info_data.data[3];
+  regs(d)->vdsi_param_10 = ct_info_data.data[4];
+  regs(d)->vdsi_param_11 = ct_info_data.data[5];
+  regs(d)->vdsi_param_12 = ct_info_data.data[6];
+
+  regs(d)->vdsi_pe_nsuma_ba = pe_nsuma_buffer(d, params);
+  regs(d)->vdsi_su_nsuma_ba = su_nsuma_buffer(d, params);
+  
+  if(params.slice_type == coding_type::B) {
+    regs(d)->vdsi_psuma_rd_top_ba = psuma_buffer_top(d, params, dpb[params.reflist[1][0].index]); 
+    regs(d)->vdsi_psuma_rd_bot_ba = psuma_buffer_bot(d, params, dpb[params.reflist[1][0].index]);
+  }
+  else {
+    regs(d)->vdsi_psuma_rd_top_ba = psuma_buffer_top(d, params, curr_pic);
+    regs(d)->vdsi_psuma_rd_bot_ba = psuma_buffer_bot(d, params, curr_pic);
+  }
+  regs(d)->vdsi_psuma_wr_top_ba = psuma_buffer_top(d, params, curr_pic); 
+  regs(d)->vdsi_psuma_wr_bot_ba = psuma_buffer_bot(d, params, curr_pic);
+
+  configure_ref_pic_info_tbl(d, params, dpb, regs(d)->ref_pic_info_tbl);
+  configure_poc_table(params.reflist[0], regs(d)->cnt_tbl_l[0]);
+  configure_poc_table(params.reflist[1], regs(d)->cnt_tbl_l[1]);
+  
+  configure_weighted_pred_tables(params.reflist, regs(d)->wt);
+
+  regs(d)->vdsi_cfg = 0x3fff;
+  regs(d)->vdsi_conceal_cfg = 0x10000;
+
+  regs(d)->vdsi_dma_list0_ad = set(dma_list::en, 1) | set(dma_list::ad, sizeof(std::uint32_t)*(begin(dma) - regs(d)->vdsi_cfg_data));
+  regs(d)->vdsi_dma_list1_ad = 0;
+
+  //dump_vdsi_regs(std::cout, regs(d));
+}
+
+void async_decode_slice(
+  device d,
+  h264_decode_params const& params,
+  utils::range<asio::const_buffer const*> slice_data,
+  std::size_t slice_data_bit_offset,
+  std::function<void (std::error_code const& ec, device d, std::size_t num)> complete)
+{
+  configure(d, params);
+
+  std::array<std::uint8_t, 3> sc = {{0,0,1}};
+  
+  std::vector<asio::const_buffer> v;
+  std::copy(slice_data.begin(), slice_data.end(), std::back_inserter(v));
+  v.push_back(asio::const_buffer(sc.begin(), 3));
+
+  auto buf_end = copy_swap(&*v.begin(), &*v.end(), reinterpret_cast<std::uint64_t*>(d.impl()->buf));
+  *buf_end++ = 0x000001u;
+
+  if(params.entropy_coding_mode_flag)
+    slice_data_bit_offset = round_up(slice_data_bit_offset, std::size_t(8));
+  
+  config_sr1(d, reinterpret_cast<std::uint8_t*>(d.impl()->buf), slice_data_bit_offset, reinterpret_cast<std::uint8_t*>(buf_end));
+  //regs(d)->vdsr1_str_offs_end = buffer_size(slice_data[0])*8+8;  
+
+  auto pic_width_in_mbs = params.hor_pic_size_in_mbs;
+  start_decode(std::move(d)) += [=](std::error_code const& ec, device d) {
+    auto vdsi_stat = regs(d)->vdsi_stat;
+    std::cout << "vdsi_stat:" << std::dec << vdsi_stat << std::endl;
+    complete(ec, std::move(d), (vdsi_stat >> 24) * pic_width_in_mbs + (vdsi_stat >> 16) & 0xFF);
+  };
 }
 
 } //msvd
