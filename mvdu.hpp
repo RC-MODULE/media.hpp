@@ -172,10 +172,11 @@ public:
     o->ec_ = asio::error_code();
     
     if(ioctl(o->descriptor_, VIDIOC_DQBUF, &buffer)) o->ec_ = asio::error_code(errno, asio::error::get_system_category());
-     
+ 
     if(!o->ec_)
       o->bytes_transferred_ = sizeof(v4l2_buffer);
-    
+   
+     
     return o->ec_ != error::would_block; 
   }
 private:
@@ -206,7 +207,7 @@ auto async_render(handle const& h, std::shared_ptr<buffer<U>> buf, F func) -> ty
 
     auto ado = std::move(d->async_deque_op);
     d->async_deque_op =
-      utils::async_read_some(d->fd, dequeue_buffers{d}) >> [](std::size_t) {};
+      utils::async_read_some(d->fd, dequeue_buffers{d}) >> [buf](std::size_t) {};
 /*
       >> [=](std::size_t) {
         v4l2_buffer b = {};
@@ -217,10 +218,10 @@ auto async_render(handle const& h, std::shared_ptr<buffer<U>> buf, F func) -> ty
       };
 */
     d->strand.post([=] {
-    std::move(ado)
-    += [=](std::error_code const& ec) mutable {
-      d->strand.post(std::bind(func, ec, std::move(buf)));
-    };
+      std::move(ado)
+      += [=](std::error_code const& ec) mutable {
+        d->strand.post(std::bind(func, ec, std::move(buf)));
+      };
     });
   });
 }
