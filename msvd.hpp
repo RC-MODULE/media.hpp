@@ -2,163 +2,196 @@
 #define __MSVD_HPP_5cab0e5f_3058_498e_857a_a1e6bfea1e98__
 
 #include "mpeg.hpp"
+#include "bitstream.hpp"
 #include <asio.hpp>
 #include <asio/system_timer.hpp>
 #include "utils.hpp"
+#include "utils/utils/asio_ioctl.hpp"
+#include <linux/msvdhd.h>
+#include "mvdu.hpp"
 
 namespace msvd {
 
-enum class errc : int {
-  success,
-  unspecified_failure,
-  out_of_extmem,
-  reflist_is_too_long,
-  no_free_frame_id,
-  parse_error,
-  unexpected_end_of_picture
-};
-
-enum class structure { top = 1, bot = 2, frame = 3 };
-
-enum class coding_type { D = 0, I = 1, P = 2, B = 3 };
-
-inline
-std::error_category const& error_category() noexcept {
- 	static struct : public std::error_category {
-		const char* name() const noexcept { return "MSVD"; }
- 
-    virtual std::string message(int ev) const {
-			switch(static_cast<errc>(ev)) {
-      case errc::success: return "The operation was successfully completed";
-			case errc::out_of_extmem: return "out of external memory";
-      default: return "unknown error";
-			};
-		}
-	} cat;
-  return cat;
-}
-
-inline
-std::error_code make_error_code(errc e) { return {int(e), error_category()}; }
-
-struct buffer_geometry {
-  std::uint32_t width;
-  std::uint32_t height;
-
-  std::uint32_t luma_offset;    
-  std::uint32_t chroma_offset;
+struct decode_result {
+  std::size_t num_of_decoded_macroblocks;
 };
 
 template<typename Buffer>
 struct buffer_traits;
 
-struct device {
-  class device_impl;
-private:  
-  device_impl* p;
-  
-  device_impl* release() {
-    auto t = p;
-    p = 0;
-    return t;
-  }
-
-public:
-  device() noexcept = default;
-  device(device&& r) noexcept : p(r.release()) {}
-
-  device(device_impl* p) : p(p) {}
-  
-  device& operator = (device&& r) noexcept {
-    assert(p == 0);
-    p = r.release();
-  }
-
-  device_impl* impl() const { return p; }
-
-  ~device();
+template<typename U>
+struct buffer_traits<std::shared_ptr<mvdu::buffer<U>>> {
+  static constexpr std::uint32_t width = mvdu::buffer_width;
+  static constexpr std::uint32_t height = mvdu::buffer_height;
+  static constexpr std::uint32_t luma_offset = 0;
+  static constexpr std::uint32_t chroma_offset = mvdu::buffer_chroma_offset;
 };
 
-void async_open(asio::io_service& io, std::function<void (std::error_code const&, device)> func);
-
-asio::io_service& get_io_service(device&);
+struct decoder {
+  decoder(asio::io_service& io) : fd(io) {
+    fd.assign(::open("/dev/msvdhd", O_RDWR));
+  }
   
-void async_decode(
-    device d,
+  decoder(decoder const&) = delete;
+  decoder& operator=(decoder const&) = delete;
+  
+  asio::posix::stream_descriptor fd;
+};
+
+//mpeg decoding impl
+namespace detail {
+
+msvd_coding_type to_msvd(mpeg::picture_coding t) {
+  switch(t) {
+  case mpeg::picture_coding::P: return msvd_coding_type_P;
+  case mpeg::picture_coding::B: return msvd_coding_type_B;
+  case mpeg::picture_coding::I: return msvd_coding_type_I;
+  default: throw std::logic_error("unsupported coding type");
+  }
+}
+
+msvd_picture_type to_msvd(mpeg::picture_type p) {
+  return static_cast<msvd_picture_type>(static_cast<unsigned>(p));
+}
+
+template<typename Buffer, typename Sequence>
+struct mpeg_context {
+  mpeg_context(
     mpeg::sequence_header_t const& sh,
     mpeg::picture_header_t const& ph,
-    mpeg::picture_coding_extension_t const* pcx,
-    buffer_geometry const& geometry,
-    std::uint32_t curpic,
-    std::uint32_t refpic1,
-    std::uint32_t refpic2,
-    utils::range<asio::const_buffer const*> picture_data,
-    std::function<void (std::error_code const& ec, device)>);
+    mpeg::picture_coding_extension_t* pcx,
+    mpeg::quant_matrix_extension_t* qmx,
+    Buffer curpic,
+    Buffer ref0,
+    Buffer ref1,
+    Sequence const& coded_picture_data)
+  {
+    using namespace mpeg;
 
-struct h264_pic_reference {
-  structure pt;
-  std::size_t index;
+    params.geometry = {
+      buffer_traits<Buffer>::width,
+      buffer_traits<Buffer>::height,
+      buffer_traits<Buffer>::luma_offset,
+      buffer_traits<Buffer>::chroma_offset
+    };
 
-  bool long_term;
-  std::uint16_t poc_top;
-  std::uint16_t poc_bot;
+    params.hor_pic_size_in_mbs = sh.horizontal_size_value / 16;
+    params.ver_pic_size_in_mbs = sh.vertical_size_value / 16;
+
+    auto set_intra_quantiser_matrix = [this](quantiser_matrix_t const& m) {
+      std::copy(begin(m), end(m), intra_quantiser_matrix.data);
+      params.intra_quantiser_matrix = &intra_quantiser_matrix;
+    };
+
+    auto set_non_intra_quantiser_matrix = [this](quantiser_matrix_t const& m) {
+      std::copy(begin(m), end(m), non_intra_quantiser_matrix.data);
+      params.non_intra_quantiser_matrix = &non_intra_quantiser_matrix;
+    };
+
+    params.intra_quantiser_matrix = params.non_intra_quantiser_matrix = nullptr;
+    if(sh.load_intra_quantiser_matrix) set_intra_quantiser_matrix(sh.intra_quantiser_matrix);
+    if(sh.load_non_intra_quantiser_matrix) set_non_intra_quantiser_matrix(sh.non_intra_quantiser_matrix);
   
-  struct {
-    std::int8_t weight;
-    std::int8_t offset;
-  } luma, cb, cr;
+    params.mpeg2 = false;
+    params.picture_coding_type = to_msvd(ph.picture_coding_type);  
+    params.full_pel_forward_vector = ph.full_pel_forward_vector;
+    params.forward_f_code = ph.forward_f_code;
+    params.full_pel_backward_vector = ph.full_pel_backward_vector;
+    params.backward_f_code = ph.backward_f_code;
+
+    if(pcx) {
+      params.mpeg2 = true;
+      params.f_code[0][0]         = pcx->f_code[0][0];
+      params.f_code[0][1]         = pcx->f_code[0][1];
+      params.f_code[1][0]         = pcx->f_code[1][0];
+      params.f_code[1][1]         = pcx->f_code[1][1];
+      params.intra_dc_precision   = pcx->intra_dc_precision;
+      params.picture_structure    = to_msvd(pcx->picture_structure);
+      params.top_field_first      = pcx->top_field_first;
+      params.frame_pred_frame_dct = pcx->frame_pred_frame_dct;
+      params.concealment_motion_vectors = pcx->concealment_motion_vectors;
+      params.q_scale_type         = pcx->q_scale_type;
+      params.intra_vlc_format     = pcx->intra_vlc_format;
+      params.alternate_scan       = pcx->alternate_scan;
+      params.progressive_frame    = pcx->progressive_frame;
+    }
+
+    if(qmx && qmx->load_intra_quantiser_matrix) set_intra_quantiser_matrix(qmx->intra_quantiser_matrix);
+    if(qmx && qmx->load_non_intra_quantiser_matrix) set_non_intra_quantiser_matrix(qmx->non_intra_quantiser_matrix);
+
+    params.curr_pic = phys_addr(curpic);
+    curpic = curpic;
+
+    if(params.picture_coding_type == msvd_coding_type_P) {
+      refs[0] = ref0;
+      params.refpic1 = ref0 ? phys_addr(ref0) : 0;
+      params.refpic2 = 0;
+    }
+
+    if(params.picture_coding_type == msvd_coding_type_B) {
+      refs[0] = ref0;
+      refs[1] = ref1;
+
+      params.refpic1 = ref0 ? phys_addr(ref0) : 0;
+      params.refpic2 = ref1 ? phys_addr(ref1) : 0;
+    }
+
+    buffers = bitstream::adapt_sequence(coded_picture_data);
+    params.slice_data = &*buffers.begin();
+    params.slice_data_n = buffers.size();
+  }
+
+  mpeg_context(mpeg_context const&) = delete;
+  mpeg_context& operator=(mpeg_context const&) = delete;
+
+  msvd_mpeg_decode_params params;
+  msvd_mpeg_quantiser_matrix intra_quantiser_matrix;
+  msvd_mpeg_quantiser_matrix non_intra_quantiser_matrix;
+  Buffer refs[2];
+  Buffer curr;
+  decltype(bitstream::adapt_sequence(std::declval<Sequence>())) buffers;
+  msvd_decode_result result; 
 };
 
-using scaling_list_4x4_t = std::array<std::array<std::uint8_t, 16>, 6>;
-using scaling_list_8x8_t = std::array<std::array<std::uint8_t, 64>, 6>;
+template<typename B, typename S, typename F>
+auto async_decode_picture(decoder& d, std::unique_ptr<mpeg_context<B, S>> cx, F callback) ->
+  typename std::enable_if<utils::is_callable<F(std::error_code, msvd::decode_result)>::value>::type
+{
+  auto ctx = cx.get();
+  auto mc = utils::move_on_copy(std::move(cx));
 
-struct h264_decode_params {
-  buffer_geometry geometry;
-
-  unsigned hor_pic_size_in_mbs;
-  unsigned vert_pic_size_in_mbs;
-  unsigned mb_mode;
-  bool     frame_mbs_only_flag;
-  bool     mbaff_frame_flag;
-  bool     constr_intra_pred_flag;    
-  bool     direct_8x8_inference_flag;
-  bool     transform_8x8_mode_flag;
-  bool     entropy_coding_mode_flag;
-  unsigned weight_mode;  
-  int      chroma_qp_index_offset;
-  int      second_chroma_qp_index_offset;
-
-  scaling_list_4x4_t scaling_list_4x4;
-  scaling_list_8x8_t scaling_list_8x8; 
-
-  structure pic_type;
-  coding_type slice_type;
-
-  unsigned first_mb_in_slice;
-  unsigned cabac_init_idc;
-  unsigned disable_deblocking_filter_idc;
-  unsigned slice_qpy; 
-  bool     direct_spatial_mv_pred_flag;
-  unsigned luma_log2_weight_denom;
-  unsigned chroma_log2_weight_denom;
-
-  std::uint32_t curr_pic;
-  std::uint16_t poc_top;
-  std::uint16_t poc_bot;
-
-  utils::range<std::uint32_t const*> dpb;
-  std::array<utils::range<h264_pic_reference const*>,2> reflist;
-
-  structure col_pic_type;
-  bool      col_abs_diff_poc_flag; //  topAbsDiffPOC >= bottomAbsDiffPoc
-};
-
-void async_decode_slice(
-  device d,
-  h264_decode_params const& params,
-  utils::range<asio::const_buffer const*> buffers,
-  std::size_t slice_data_bit_offset,
-  std::function<void (std::error_code const& ec, device d, std::size_t num_of_decoded_mbs)> cb);
+  utils::async_write_some(d.fd, utils::make_ioctl_write_buffer<MSVD_DECODE_MPEG_FRAME>(std::ref(ctx->params)))
+  >> [ctx,&d](std::size_t) { 
+    return utils::async_read_some(d.fd, asio::mutable_buffers_1(&ctx->result, sizeof(ctx->result)));
+  }
+  >> [mc](std::size_t bytes) {
+    return decode_result{unwrap(mc)->result.num_of_decoded_mbs};
+  }
+  += callback;
 }
+
+} // detail
+
+template<typename Buffer, typename Sequence, typename F>
+auto async_decode_picture(
+  decoder& d,
+  mpeg::sequence_header_t const& sh,
+  mpeg::picture_header_t const& ph,
+  mpeg::picture_coding_extension_t* pcx,
+  mpeg::quant_matrix_extension_t* qmx,
+  Buffer curpic,
+  Buffer ref0,
+  Buffer ref1,
+  Sequence const& coded_picture_data,
+  F callback) -> typename std::enable_if<utils::is_callable<F(std::error_code, msvd::decode_result)>::value>::type
+{
+  async_decode_picture(
+    d, 
+    std::unique_ptr<detail::mpeg_context<Buffer, Sequence>>(new detail::mpeg_context<Buffer, Sequence>(sh,ph,pcx,qmx,curpic, ref0, ref1, coded_picture_data)),
+    callback);
+}
+
+} // namespace msvd
+
 #endif
 

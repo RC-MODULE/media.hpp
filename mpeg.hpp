@@ -3,12 +3,21 @@
 
 #include <exception>
 #include <array>
+#include <cassert>
 
 namespace mpeg {
 
 struct parse_error : std::exception {
   const char* what() const noexcept { return "mpeg parse error"; }
 };
+
+template<typename S>
+void next_start_code(S& s) {
+  while(!byte_aligned(s)) if(u(s, 1)) 
+    throw parse_error();
+  while(more_data(s) && next_bits(s, 24) != 0x000001) 
+    if(u(s, 8)) throw parse_error();
+}
 
 enum header_codes_t {
   picture_start_code = 0,
@@ -102,6 +111,7 @@ sequence_header_t sequence_header(S& s) {
   return h;
 }
 
+
 struct group_of_pictures_header_t {
   unsigned time_code;
   bool closed_gop;
@@ -114,9 +124,11 @@ group_of_pictures_header_t group_of_pictures_header(S& s) {
   h.time_code = u(s, 25);
   h.closed_gop = u(s, 1);
   h.broken_link = u(s, 1);
+  next_start_code(s);
   return h;
 }
 
+enum class picture_type : unsigned { top = 1, bot = 2, frame = 3};
 enum class picture_coding : unsigned { I = 1, P = 2, B = 3 };
 
 struct picture_header_t {
@@ -154,13 +166,15 @@ picture_header_t picture_header(S& s) {
 
   while(u(s, 1)) u(s, 8);
 
+  next_start_code(s);
+
   return h;
 }
 
 struct picture_coding_extension_t {
-  unsigned f_code[2][2];
+  uint8_t f_code[2][2];
   unsigned intra_dc_precision;
-  unsigned picture_structure;
+  picture_type picture_structure;
   bool top_field_first;
   bool frame_pred_frame_dct;
   bool concealment_motion_vectors;
@@ -187,7 +201,7 @@ picture_coding_extension_t picture_coding_extension(S& s) {
   x.f_code[1][1] = u(s, 4);
 
   x.intra_dc_precision = u(s, 2);
-  x.picture_structure = u(s, 2);
+  x.picture_structure = static_cast<picture_type>(u(s, 2));
   
   x.top_field_first = u(s, 1);
   x.frame_pred_frame_dct = u(s, 1);
@@ -206,7 +220,7 @@ picture_coding_extension_t picture_coding_extension(S& s) {
     x.burst_amplitude = u(s, 7);
     x.sub_carrier_phase = u(s, 8);
   }
-
+  next_start_code(s);
   return x;
 }
 
@@ -240,8 +254,28 @@ quant_matrix_extension_t quant_matrix_extension(S& s) {
   x.load_chroma_intra_quantiser_matrix = u(s, 1);
   for(auto& i: x.chroma_non_intra_quantiser_matrix)
     i = u(s, 8);
+
+  next_start_code(s);
   
   return x;
+}
+
+template<typename S>
+void unknown_extension(S& s) {
+  u(s, 4);
+
+  assert(byte_aligned(s));
+
+  while(next_bits(s, 24) != 1)
+    u(s, 8);
+}
+
+template<typename S>
+void unknown_high_level_syntax_element(S& s) {
+  assert(byte_aligned(s));
+
+  while(next_bits(s, 24) != 1)
+    u(s, 8);
 }
 
 }
