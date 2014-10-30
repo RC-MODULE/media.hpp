@@ -15,6 +15,8 @@ struct sync_read_stream {
 
     auto r = ::readv(fd.get().fd, adapted.buffers(), adapted.count());
     if(r < 0) ec = std::error_code(errno, std::system_category());
+    if(r == 0) ec = asio::error::eof;
+
     return r;
   }
 
@@ -122,7 +124,16 @@ struct context {
   template<typename Condition>
   asio::const_buffers_1 read_until(Condition c) {
     buffer.consume(bytes_to_consume);
-    bytes_to_consume = asio::read_until(stream, buffer, c);
+
+    std::error_code ec;
+    bytes_to_consume = asio::read_until(stream, buffer, c, ec);
+    if(ec == asio::error::eof) {
+      bytes_to_consume = asio::buffer_size(buffer.data());
+      ec = std::error_code();
+    }
+
+    if(ec) throw std::system_error(ec);
+
     return asio::const_buffers_1(asio::buffer_cast<const void*>(buffer.data()), bytes_to_consume);
   }
 
@@ -178,9 +189,7 @@ struct context {
       callback(std::error_code());
       return;
     }
-    std::cout << "headers:" << asio::buffer_size(headers) << std::endl;
     process_picture_headers(headers);
-    //process_picture_headers(read_picture_headers());
   
     output.async_allocate(ph.temporal_reference, [=](std::error_code const& ec, frame_t frame) {
       auto data = read_picture_data();
@@ -227,8 +236,6 @@ int main(int argc, char* argv[]) {
   cx.async_decode_stream([&](std::error_code const& ec) {
     std::cout << "done:" << ec << std::endl;
   });
-
-//  set_params(cx.output.device, mvdu::video_mode::hd, {0,0,1920,1080}, {0,0,1920, 1080});
 
   io.run();
 }
