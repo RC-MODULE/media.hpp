@@ -160,7 +160,8 @@ struct ref_pic_list_modification_operation {
   };
 };
 
-struct slice_header {
+//subset of slice header fields with enough info to distinguish between pictures 
+struct slice_identity_header {
   bool IdrPicFlag;
   unsigned nal_ref_idc;
 
@@ -171,7 +172,6 @@ struct slice_header {
   unsigned idr_pic_id;
 
   unsigned frame_num;
-  unsigned colour_plane_id = 0;
 
   union {
     struct  {
@@ -180,7 +180,10 @@ struct slice_header {
     };
     int delta_pic_order_cnt[2] = {0,0};
   };
+};
 
+struct slice_header : slice_identity_header {
+  unsigned colour_plane_id = 0;
   unsigned redundant_pic_cnt;
   bool direct_spatial_mv_pred_flag = false;
   bool num_ref_idx_active_override_flag = false;
@@ -584,6 +587,19 @@ utils::optional<slice_header> parse_slice_header(parsing_context const& cx, Pars
 
 inline bool has_mmco5(slice_header const& s) {
   return std::any_of(s.mmcos.begin(), s.mmcos.end(), [](memory_management_control_operation const& o) { return o.id == 5; });
+}
+
+// 7.4.1.2.4 Detection of the first VCL NAL unit of a primary coded picture
+inline
+bool are_different_pictures(slice_identity_header const& a, slice_identity_header const& b) {
+  return a.frame_num != b.frame_num
+      || a.pic_parameter_set_id != b.pic_parameter_set_id
+      || a.pic_type != b.pic_type
+      || (a.nal_ref_idc != b.nal_ref_idc && (a.nal_ref_idc == 0 || b.nal_ref_idc == 0))
+      || a.IdrPicFlag != b.IdrPicFlag
+      || (a.IdrPicFlag && (a.idr_pic_id != b.idr_pic_id))
+      || a.delta_pic_order_cnt[0] != b.delta_pic_order_cnt[0]
+      || a.delta_pic_order_cnt[1] != b.delta_pic_order_cnt[1];
 }
 
 }

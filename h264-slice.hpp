@@ -11,39 +11,11 @@ namespace h264 {
 
 // 7.4.1.2.4 Detection of the first VCL NAL unit of a primary coded picture
 struct new_picture_detector {
-  bool IdrPicFlag;
-  unsigned nal_ref_idc;
-  unsigned pic_parameter_set_id;
-  picture_type pic_type;
-  unsigned idr_pic_id;
-  unsigned frame_num = -1u;
-  union {
-    struct  {
-      unsigned pic_order_cnt_lsb;
-      unsigned delta_pic_order_cnt_bottom;
-    };
-    int delta_pic_order_cnt[2] = {0,0};
-  };
+  slice_identity_header h;
 
   bool operator()(slice_header const& slice) {
-    bool r = 
-         slice.frame_num != frame_num
-      || slice.pic_parameter_set_id != pic_parameter_set_id
-      || slice.pic_type != pic_type
-      || (slice.nal_ref_idc != nal_ref_idc && (nal_ref_idc == 0 || slice.nal_ref_idc == 0))
-      || slice.IdrPicFlag != IdrPicFlag
-      || (IdrPicFlag && (slice.idr_pic_id != idr_pic_id))
-      || slice.delta_pic_order_cnt[0] != delta_pic_order_cnt[0]
-      || slice.delta_pic_order_cnt[1] != delta_pic_order_cnt[1];
-
-    IdrPicFlag = slice.IdrPicFlag;
-    nal_ref_idc = slice.nal_ref_idc;
-    pic_parameter_set_id = slice.pic_parameter_set_id;
-    pic_type = slice.pic_type;
-    idr_pic_id  = slice.idr_pic_id;
-    frame_num = slice.frame_num;
-    delta_pic_order_cnt[0] = slice.delta_pic_order_cnt[0];
-    delta_pic_order_cnt[1] = slice.delta_pic_order_cnt[1];
+    bool r = are_different_pictures(h, slice);
+    h = slice; 
 
     return r;
   } 
@@ -355,7 +327,7 @@ picture_reference<I> const& check_bounds(picture_reference<I> const& ref, I firs
 
 // 8.2.4.3 Modification process for reference picture lists
 template<typename I, typename C, typename R, typename M>
-void ref_pic_list_modification(
+R ref_pic_list_modification(
   unsigned max_frame_num, C const& curr_pic,
   I first_frame, I last_frame,
   M first_modification, M last_modification,
@@ -383,6 +355,7 @@ void ref_pic_list_modification(
     check_bounds(r, first_frame, last_frame);
     modify(first_reference, last_reference, r);
   }
+  return first_reference;
 }
 
 // 8.2.4 Decoding process for reference picture lists construction
@@ -419,12 +392,12 @@ O generate_reflist_for_p_slice(unsigned max_frame_num, C const& curr_pic,
   std::array<picture_reference<I>,32> ref = {{}};
   num_ref_idx_l0_active = std::min(num_ref_idx_l0_active, ref.size());
 
-  initialise_reflist(pic_type(curr_pic), [&](picture_reference<I> const& p) { return -FrameNumWrap(max_frame_num, curr_pic, p); },
-    begin(frames), end(frames), begin(ref), end(ref));
+  auto i = initialise_reflist(pic_type(curr_pic), [&](picture_reference<I> const& p) { return -FrameNumWrap(max_frame_num, curr_pic, p); },
+                              begin(frames), end(frames), begin(ref), end(ref));
 
-  ref_pic_list_modification(max_frame_num, curr_pic, begin(frames), end(frames), begin(modifications), end(modifications), begin(ref), end(ref));
+  auto r = ref_pic_list_modification(max_frame_num, curr_pic, begin(frames), end(frames), begin(modifications), end(modifications), begin(ref), end(ref));
   
-  return std::copy(begin(ref), begin(ref) + num_ref_idx_l0_active, output);
+  return std::copy(begin(ref), std::min(begin(ref) + num_ref_idx_l0_active, std::max(i,r)), output);
 }
 
 template<typename C, typename I, typename M, typename O>
@@ -442,21 +415,21 @@ std::pair<O,O> generate_reflists_for_b_slice(unsigned max_frame_num, C const& cu
   auto key0 = [&](picture_reference<I> const& a) {
     return ((PicOrderCnt(a) <= PicOrderCnt(curr_pic)) ? std::make_tuple(false, -PicOrderCnt(a)-1) : std::make_tuple(true, PicOrderCnt(a)+1)); 
   };
-  initialise_reflist(pic_type(curr_pic), key0, begin(frames), end(frames), begin(ref0), end(ref0)); 
+  auto i0 = initialise_reflist(pic_type(curr_pic), key0, begin(frames), end(frames), begin(ref0), end(ref0)); 
 
   auto key1 = [&](picture_reference<I> const& a) {
     return ((PicOrderCnt(a) > PicOrderCnt(curr_pic)) ? std::make_tuple(false, PicOrderCnt(a)+1) : std::make_tuple(true, -PicOrderCnt(a)-1));
   };
-  initialise_reflist(pic_type(curr_pic), key1, begin(frames), end(frames), begin(ref1), end(ref1)); 
+  auto i1 = initialise_reflist(pic_type(curr_pic), key1, begin(frames), end(frames), begin(ref1), end(ref1)); 
 
   if(num_ref_idx_l1_active > 1 && num_ref_idx_l0_active == num_ref_idx_l1_active && std::equal(begin(ref0), begin(ref0) + num_ref_idx_l0_active, begin(ref1)))
     std::swap(ref1[0], ref1[1]);
 
-  ref_pic_list_modification(max_frame_num, curr_pic, begin(frames), end(frames), begin(modifications0), end(modifications0), begin(ref0), begin(ref0) + num_ref_idx_l0_active);
-  ref_pic_list_modification(max_frame_num, curr_pic, begin(frames), end(frames), begin(modifications1), end(modifications1), begin(ref1), begin(ref1) + num_ref_idx_l1_active);
+  auto r0 = ref_pic_list_modification(max_frame_num, curr_pic, begin(frames), end(frames), begin(modifications0), end(modifications0), begin(ref0), end(ref0));
+  auto r1 = ref_pic_list_modification(max_frame_num, curr_pic, begin(frames), end(frames), begin(modifications1), end(modifications1), begin(ref1), end(ref1));
 
-  return std::make_pair(std::copy(begin(ref0), begin(ref0) + num_ref_idx_l0_active, output0), 
-                        std::copy(begin(ref1), begin(ref1) + num_ref_idx_l1_active, output1));
+  return std::make_pair(std::copy(begin(ref0), std::min(begin(ref0) + num_ref_idx_l0_active, std::max(i0, r0)), output0), 
+                        std::copy(begin(ref1), std::min(begin(ref1) + num_ref_idx_l1_active, std::max(i1, r1)), output1));
 }
 
 template<typename I, typename C>
