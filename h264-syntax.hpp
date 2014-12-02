@@ -40,6 +40,15 @@ inline bool has_bot(picture_type p) { return p != picture_type::top; }
 
 inline picture_type opposite(picture_type pt) { return pt == picture_type::bot ? picture_type::top : picture_type::bot; }
 
+template<typename A>
+bool more_rbsp_data(A& a) { 
+  if(!more_data(a)) return false;
+
+  auto n = bits_until_byte_aligned(a);
+  if(n == 0) n = 8;
+  return next_bits(a, n) != (1 << (n - 1));
+}
+
 struct nal_unit_header {
   std::uint8_t nal_ref_idc;
   std::uint8_t nal_unit_type;
