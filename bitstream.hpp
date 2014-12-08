@@ -55,7 +55,7 @@ public:
   }
 
   friend std::ptrdiff_t operator - (bit_iterator const& a, bit_iterator const& b) {
-    return (a.p - b.p) * width + (a.offset - b.offset);
+    return (a.pos - b.pos) * width + (a.offset - b.offset);
   }
 
   friend bool operator == (bit_iterator const& a, bit_iterator const& b) {
@@ -185,6 +185,7 @@ public:
     return bits.accumulator >> (32 - n);
   }
 
+  friend std::size_t bits_until_byte_aligned(bit_parser const& bits) { return available(bits) % 8; }
   friend bool byte_aligned(bit_parser const& bits) { return available(bits) % 8 == 0; }
 
   friend std::uint32_t u(bit_parser& bits, std::size_t n) {
@@ -233,6 +234,8 @@ bool more_data(bit_parser<I> const& r) { return r.end() != r.begin(); }
 
 template<typename I>
 bool more_data(utils::range<bit_iterator<I>> const& r) { return r.end() != r.begin(); }
+
+const int startcode_length = 3;
 
 template<typename I>
 I find_startcode_prefix(I begin, I end) {
@@ -306,7 +309,7 @@ public:
 
   I base() const { return buffer; }
   std::ptrdiff_t position() const { return offset; }
-
+  
   asio_sequence_iterator& operator += (std::ptrdiff_t n) {
     offset += n;
     while(offset < 0) {
@@ -392,8 +395,49 @@ template<typename I>
 asio_sequence_iterator<I> make_asio_sequence_iterator(I i) { return {i}; }
 
 template<typename C>
-auto make_asio_sequence_range(C const& c) -> decltype(utils::make_range(make_asio_sequence_iterator(c.begin()), make_asio_sequence_iterator(c.end()))) {
+auto make_asio_sequence_range(C& c) -> decltype(utils::make_range(make_asio_sequence_iterator(c.begin()), make_asio_sequence_iterator(c.end()))) {
   return utils::make_range(make_asio_sequence_iterator(c.begin()), make_asio_sequence_iterator(c.end()));
+}
+
+inline
+asio::const_buffers_1 adjust_sequence(asio::const_buffers_1 const& buffer, std::size_t offset, std::size_t length) {
+  assert(offset+length <= asio::buffer_size(buffer));
+
+  return asio::const_buffers_1(asio::buffer_cast<std::uint8_t const*>(buffer) + offset, length);
+}
+
+template<std::size_t N>
+std::array<asio::const_buffer, N> adjust_sequence(std::array<asio::const_buffer, N> const& s, std::size_t offset, std::size_t length) {
+  assert(offset + length <= asio::buffer_size(s));
+
+  std::array<asio::const_buffer, N> r;
+
+  std::transform(s.begin(), s.end(), r.begin(), 
+    [&](asio::const_buffer const& a) {
+      auto o = std::min(asio::buffer_size(a), offset);
+      auto n = std::min(length, asio::buffer_size(a) - o);
+      length -= n;
+      offset -= o;
+      return asio::const_buffer(asio::buffer_cast<std::uint8_t const*>(a) + o, n);
+  });
+
+  return r;
+}
+
+inline
+std::vector<asio::const_buffer> adjust_sequence(std::vector<asio::const_buffer> s, std::size_t offset, std::size_t length) {
+  std::transform(s.begin(), s.end(), s.begin(),
+    [&](asio::const_buffer const& a) {
+      auto o = std::min(asio::buffer_size(a), offset);
+      auto n = std::min(length, asio::buffer_size(a) - o);
+      length -= n;
+      offset -= o;
+      return asio::const_buffer(asio::buffer_cast<std::uint8_t const*>(a) + o, n);
+  });
+
+  s.erase(std::remove_if(s.begin(), s.end(), [](asio::const_buffer const& a) { return asio::buffer_size(a) == 0; }), s.end());
+
+  return s;
 }
 
 inline 
