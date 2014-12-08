@@ -4,6 +4,7 @@
 #include "mpeg.hpp"
 #include "h264-syntax.hpp"
 #include "h264-slice.hpp"
+#include "h264-context.hpp"
 #include "bitstream.hpp"
 #include <asio.hpp>
 #include <asio/system_timer.hpp>
@@ -382,6 +383,37 @@ auto async_decode_slice(
       new detail::h264_context<Sequence>(sps, pps, header, dpb_begin, dpb_end, curr_pic, slice_data, slice_data_offset)
     ),
     callback);
+}
+
+template<typename FrameBuffer, typename Sequence, typename Callback>
+auto async_decode_slice(
+  decoder& d,
+  h264::context<FrameBuffer> const& cx,
+  Sequence const& slice_data,
+  std::size_t slice_data_offset,
+  Callback callback) -> typename std::enable_if<utils::is_callable<Callback(std::error_code, msvd::decode_result)>::value>::type
+{
+  async_decode_slice(d, cx.sps(), cx.pps(), cx.slice(), *cx.current_picture(), cx.begin(), cx.end(), 
+    slice_data, slice_data_offset, callback);
+}
+
+template<typename FrameBuffer, typename FrameBufferAllocator, typename Sequence, typename Callback>
+auto async_decode_slice(
+  decoder& d,
+  FrameBufferAllocator& allocator,
+  h264::context<FrameBuffer>& cx,
+  Sequence const& slice_data,
+  std::size_t slice_data_offset,
+  Callback callback) -> typename std::enable_if<utils::is_callable<Callback(std::error_code, msvd::decode_result)>::value>::type 
+{
+  if(!cx.current_picture()->frame->buffer) {
+    async_allocate(allocator, [=, &d, &cx](std::error_code const& ec, FrameBuffer buffer) {
+      cx.current_picture()->frame->buffer = std::move(buffer);
+      async_decode_slice(d, cx, slice_data, slice_data_offset, callback);
+    });
+  }
+  else
+    async_decode_slice(d, cx, slice_data, slice_data_offset, callback);
 }
 
 } // namespace msvd
