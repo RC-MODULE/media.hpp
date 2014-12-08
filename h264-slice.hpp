@@ -276,6 +276,11 @@ struct picture_reference {
   }
 };
 
+template<typename I>
+auto frame_buffer(picture_reference<I> const& p) -> decltype(frame_buffer(*p.frame)) {
+  return frame_buffer(*p.frame);
+}
+
 template<typename I, typename P>
 picture_reference<I> find_picture(picture_type curr_pic_type, I first_frame, I last_frame, P predicate) {
   for(;first_frame != last_frame; ++first_frame) {
