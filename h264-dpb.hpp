@@ -1,6 +1,9 @@
 #ifndef __h264_dpb_hpp__f3777383_4d26_4213_a2c5_eabedfb388f6__
 #define __h264_dpb_hpp__f3777383_4d26_4213_a2c5_eabedfb388f6__
 
+#include "h264-syntax.hpp"
+#include "h264-slice.hpp"
+
 // default implementation of h264 decoded picture buffer
 
 namespace h264 {
@@ -33,6 +36,7 @@ struct frame {
       get_frame(static_cast<T&>(f)).long_term_frame_idx = long_term_frame_idx;
     }
     friend void mark_as_unused_for_reference(field_base& f) { f.rt = ref_type::none; }
+    friend Buffer frame_buffer(field_base const& f) { return get_frame(f).buffer; }
   };
 
   struct top_field : field_base<top_field> {} top;
@@ -72,6 +76,17 @@ struct frame {
   friend void BotFieldOrderCnt(frame& f, int cnt) { f.bot.poc = cnt; }
   friend int TopFieldOrderCnt(frame const& f) { return f.top.poc; }
   friend int BotFieldOrderCnt(frame const& f) { return f.bot.poc; }
+  friend int PicOrderCnt(frame const& f) { 
+    switch(f.structure) {
+    case structure_type::top: return TopFieldOrderCnt(f);
+    case structure_type::bot: return BotFieldOrderCnt(f);
+    default: return std::min(TopFieldOrderCnt(f), BotFieldOrderCnt(f));
+    }
+  }
+
+  friend Buffer frame_buffer(frame const& f) { return f.buffer; }
+  // returns true if frame consists of fields (i.e a single field or complementary pair)
+  friend bool field_flag(frame const& f) { return f.structure != structure_type::frame; }
 };
 
 template<typename Buffer>
@@ -85,12 +100,17 @@ class decoded_picture_buffer : public std::vector<frame<Buffer>> {
 public:
   using std::vector<frame<Buffer>>::vector;
 
+  utils::optional<picture_reference<typename std::vector<frame<Buffer>>::const_iterator>> current_picture() const {
+    if(this->empty()) return utils::nullopt; 
+    return picture_reference<typename std::vector<frame<Buffer>>::const_iterator>{this->end()-1, curr_pic_type};
+  }
+
   utils::optional<picture_reference<typename std::vector<frame<Buffer>>::iterator>> current_picture() {
     if(this->empty()) return utils::nullopt; 
     return picture_reference<typename std::vector<frame<Buffer>>::iterator>{this->end()-1, curr_pic_type};
   }
 
-  void new_picture(bool IdrPicFlag, picture_type pt, unsigned frame_num, bool has_mmco5) {
+  void new_picture(bool IdrPicFlag, picture_type pt, unsigned frame_num, bool has_mmco5, poc_t poc) {
     if(is_new_frame(IdrPicFlag, pt, frame_num, has_mmco5)) {
       this->push_back(frame<Buffer>{frame_num, -1u, static_cast<structure_type>(pt)});
     }
@@ -100,6 +120,9 @@ public:
     curr_pic_type = pt;
 
     assert(!is_short_term_reference(*current_picture()) && !is_long_term_reference(*current_picture()));
+
+    if(has_top(pt)) TopFieldOrderCnt(*current_picture(), poc.top);
+    if(has_bot(pt)) BotFieldOrderCnt(*current_picture(), poc.bot);
   }
 };
 
