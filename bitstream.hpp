@@ -317,8 +317,10 @@ public:
       offset += asio::buffer_size(*buffer);
     }
 
-    while(offset >= asio::buffer_size(*buffer))
-      offset -= asio::buffer_size(*buffer++);
+    while(offset > 0 && offset >= asio::buffer_size(*buffer)) {
+      offset -= asio::buffer_size(*buffer);
+      ++buffer;
+    }
 
     return *this;
   }
