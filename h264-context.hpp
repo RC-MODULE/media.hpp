@@ -13,8 +13,8 @@ struct context : h264::decoded_picture_buffer<FrameBuffer> {
 
     current_slice = utils::nullopt;
 
-    auto parser = bitstream::make_bit_parser(bitstream::make_bit_range(nalu)); 
-
+    auto parser = bitstream::make_bit_parser(bitstream::make_bit_range(bitstream::remove_startcode_emulation_prevention(nalu))); 
+    
     auto h = parse_nal_unit_header(parser);
     
     switch(static_cast<nalu_type>(h.nal_unit_type)) {
@@ -31,7 +31,7 @@ struct context : h264::decoded_picture_buffer<FrameBuffer> {
       break; }
     }
 
-    return parser.begin();
+    return bitstream::bit_iterator<I>{parser.begin().base().base(), int(parser.begin().shift())};
   }
 
   template<typename BufferSequence>
