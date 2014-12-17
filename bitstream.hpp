@@ -246,10 +246,10 @@ I find_startcode_prefix(I begin, I end) {
 template<typename I>
 class remove_startcode_emulation_prevention_iterator {
   I pos;
-  uint32_t acc = 0;
+  std::uint32_t acc = 0xFFFFFFFF;
 public:
-  using iterator_category = std::input_iterator_tag;
-  using difference_type = std::size_t;
+  using iterator_category = std::bidirectional_iterator_tag;
+  using difference_type = std::ptrdiff_t;
   using value_type = std::uint8_t;
   using pointer = void;
   using reference = void;
@@ -274,6 +274,19 @@ public:
   remove_startcode_emulation_prevention_iterator operator++(int) {
     auto t = *this;
     ++*this;
+    return t;
+  }
+
+  remove_startcode_emulation_prevention_iterator& operator--() {
+    acc =  (acc >> 8) | 0xFF000000;
+    --pos;
+    if((acc & 0xFFFFFF) == 0x000003) return --*this;
+    return *this;
+  }
+
+  remove_startcode_emulation_prevention_iterator operator--(int) {
+    auto t = *this;
+    --*this;
     return t;
   }
 
@@ -323,6 +336,10 @@ public:
     }
 
     return *this;
+  }
+
+  asio_sequence_iterator& operator -= (std::ptrdiff_t n) {
+    return *this += -n;
   }
 
   friend bool operator == (asio_sequence_iterator const& a, asio_sequence_iterator const& b) {
