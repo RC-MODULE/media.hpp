@@ -87,7 +87,7 @@ struct sequence_header_t {
 };
 
 template<typename S>
-sequence_header_t sequence_header(S& s) {
+sequence_header_t sequence_header(S&& s) {
   sequence_header_t h;
   h.horizontal_size_value = u(s, 12);
   h.vertical_size_value = u(s, 12);
@@ -119,7 +119,7 @@ struct group_of_pictures_header_t {
 };
 
 template<typename S>
-group_of_pictures_header_t group_of_pictures_header(S& s) {
+group_of_pictures_header_t group_of_pictures_header(S&& s) {
   group_of_pictures_header_t h;
   h.time_code = u(s, 25);
   h.closed_gop = u(s, 1);
@@ -130,6 +130,11 @@ group_of_pictures_header_t group_of_pictures_header(S& s) {
 
 enum class picture_type : unsigned { top = 1, bot = 2, frame = 3};
 enum class picture_coding : unsigned { I = 1, P = 2, B = 3 };
+
+inline bool is_opposite(picture_type a, picture_type b) { 
+  if(a == picture_type::top) return b == picture_type::bot;
+  if(a == picture_type::bot) return b == picture_type::top;
+}
 
 struct picture_header_t {
   unsigned temporal_reference;
@@ -142,7 +147,7 @@ struct picture_header_t {
 };
 
 template<typename S>
-picture_header_t picture_header(S& s) {
+picture_header_t picture_header(S&& s) {
   picture_header_t h;
   h.temporal_reference = u(s, 10);
   
@@ -193,7 +198,7 @@ struct picture_coding_extension_t {
 };
 
 template<typename S>
-picture_coding_extension_t picture_coding_extension(S& s) {
+picture_coding_extension_t picture_coding_extension(S&& s) {
   picture_coding_extension_t x;
   x.f_code[0][0] = u(s, 4);
   x.f_code[0][1] = u(s, 4);
@@ -236,7 +241,7 @@ struct quant_matrix_extension_t {
 };
 
 template<typename S>
-quant_matrix_extension_t quant_matrix_extension(S& s) {
+quant_matrix_extension_t quant_matrix_extension(S&& s) {
   quant_matrix_extension_t x;
   
   x.load_intra_quantiser_matrix = u(s, 1);
@@ -271,13 +276,14 @@ void unknown_extension(S& s) {
 }
 
 template<typename S>
-void unknown_high_level_syntax_element(S& s) {
+void unknown_high_level_syntax_element(S&& s) {
   assert(byte_aligned(s));
 
-  while(next_bits(s, 24) != 1)
+  while(more_data(s) && next_bits(s, 24) != 1)
     u(s, 8);
 }
 
 }
 
 #endif
+
