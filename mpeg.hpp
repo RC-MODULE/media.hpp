@@ -5,6 +5,8 @@
 #include <array>
 #include <cassert>
 
+#include "bitstream.hpp"
+
 namespace mpeg {
 
 struct parse_error : std::exception {
@@ -134,6 +136,7 @@ enum class picture_coding : unsigned { I = 1, P = 2, B = 3 };
 inline bool is_opposite(picture_type a, picture_type b) { 
   if(a == picture_type::top) return b == picture_type::bot;
   if(a == picture_type::bot) return b == picture_type::top;
+  return false;
 }
 
 struct picture_header_t {
@@ -281,6 +284,39 @@ void unknown_high_level_syntax_element(S&& s) {
 
   while(more_data(s) && next_bits(s, 24) != 1)
     u(s, 8);
+}
+
+// various helpers
+template<typename I>
+I find_sequence_or_picture_header(I first, I last) {
+  for(;;) {
+    first = bitstream::find_startcode_prefix(first, last);
+    if(last - first < 4) return last; 
+    if(first[3] == mpeg::picture_start_code || first[3] == mpeg::sequence_header_code) return first;
+    first += 4;
+  }
+}
+
+template<typename I>
+I find_next_sequence_or_picture_header(I first, I last) {
+  auto i = find_sequence_or_picture_header(first, last);
+  if(i != last)
+    i = find_sequence_or_picture_header(i + 4, last);
+  return i;
+}
+
+template<typename I>
+I find_next_access_unit(I first, I last) {
+  first = find_sequence_or_picture_header(first, last);
+  if(first == last) return first;
+
+  std::advance(first, 3);
+  if(*first == sequence_header_code) {
+    first = find_sequence_or_picture_header(++first, last);
+    if(first != last) std::advance(first, 4);
+  } 
+
+  return find_sequence_or_picture_header(first, last);
 }
 
 }
