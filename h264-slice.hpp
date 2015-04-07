@@ -357,10 +357,14 @@ R ref_pic_list_modification(
   };
 
   for(;first_reference != last_reference && first_modification != last_modification; ++first_reference, ++first_modification) {
+    try {
     auto r = first_modification->id != 2 ?
         short_term(*first_modification) : get_picture_by_long_term_picnum(curr_pic, first_frame, last_frame, first_modification->long_term_pic_num);
     check_bounds(r, first_frame, last_frame);
     modify(first_reference, last_reference, r);
+    } catch(std::exception const& e) {
+      std::cerr << e.what() << std::endl;
+    }
   }
   return first_reference;
 }
@@ -544,7 +548,12 @@ struct dec_ref_pic_marker {
         dec_ref_pic_marking_sliding_window(max_num_ref_frames, curr_pic, begin, end);
       else {
         for(auto& op: mmcos)
-          adaptive_memory_control(max_frame_num, op, curr_pic, begin, end);
+          try {
+            adaptive_memory_control(max_frame_num, op, curr_pic, begin, end);
+          }
+          catch(std::exception const& e) {
+            std::cerr << e.what() << std::endl;
+          }
       }
       if(!is_long_term_reference(curr_pic)) mark_as_short_term_reference(curr_pic);
     }
