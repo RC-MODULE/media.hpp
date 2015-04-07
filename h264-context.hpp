@@ -16,7 +16,7 @@ struct context : h264::decoded_picture_buffer<FrameBuffer> {
     auto parser = bitstream::make_bit_parser(bitstream::make_bit_range(bitstream::remove_startcode_emulation_prevention(nalu))); 
     
     auto h = parse_nal_unit_header(parser);
-    
+
     switch(static_cast<nalu_type>(h.nal_unit_type)) {
     case nalu_type::seq_parameter_set:
       add(params, parse_sps(parser));
@@ -24,8 +24,16 @@ struct context : h264::decoded_picture_buffer<FrameBuffer> {
     case nalu_type::pic_parameter_set:
       add(params, parse_pps(params, parser));
       break;
+    case nalu_type::access_unit_delimiter:
+      recovery_point = false;
+      break;
+    case nalu_type::sei: {
+      auto pt = u(parser, 8);
+      if(pt == 6) recovery_point = true;
+      break; }
     case nalu_type::slice_layer_non_idr:
     case nalu_type::slice_layer_idr: {
+      utils::timing_guard t(std::chrono::milliseconds(5));
       auto s = parse_slice_header(params, parser, h.nal_unit_type, h.nal_ref_idc);
       if(s) on_slice(std::move(*s));
       break; }
@@ -53,7 +61,8 @@ private:
     if(new_pic_flag) {
       if(this->current_picture()) dec_ref_pic_marking(*this->current_picture(), this->begin(), this->end());
       
-      if(new_slice.IdrPicFlag) poc = h264::poc_decoder(*params.sps(new_slice));
+      if(new_slice.IdrPicFlag || (recovery_point && !poc))
+        poc = h264::poc_decoder(*params.sps(new_slice));
 
       if(poc) {
         this->new_picture(new_slice.IdrPicFlag, new_slice.pic_type, new_slice.frame_num, has_mmco5(new_slice), (*poc)(new_slice));
@@ -69,6 +78,7 @@ private:
   utils::optional<h264::slice_header>       current_slice;
   utils::optional<h264::poc_decoder>        poc;
   h264::dec_ref_pic_marker                  dec_ref_pic_marking;
+  bool recovery_point = false;
 };
 
 }
