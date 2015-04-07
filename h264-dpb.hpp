@@ -16,8 +16,10 @@ inline bool has_bot(structure_type s) { return s != structure_type::top; }
 
 template<typename Buffer>
 struct frame {
+  frame(unsigned frame_num, structure_type structure) : frame_num(frame_num), structure(structure) {}
+
   unsigned frame_num;
-  unsigned long_term_frame_idx;
+  unsigned long_term_frame_idx = -1u;
 
   structure_type structure;
 
@@ -42,7 +44,10 @@ struct frame {
   struct top_field : field_base<top_field> {} top;
   struct bot_field : field_base<bot_field> {} bot;
 
+private:
   Buffer buffer;
+public:
+  bool needed_for_output = true;
 
   friend frame const& get_frame(top_field const& top) { return *utils::container_of(&top, &frame::top); }
   friend frame const& get_frame(bot_field const& bot) { return *utils::container_of(&bot, &frame::bot); };
@@ -85,8 +90,13 @@ struct frame {
   }
 
   friend Buffer frame_buffer(frame const& f) { return f.buffer; }
+  friend void frame_buffer(frame& f, Buffer buffer) { f.buffer = std::move(buffer); }
+
   // returns true if frame consists of fields (i.e a single field or complementary pair)
   friend bool field_flag(frame const& f) { return f.structure != structure_type::frame; }
+
+  friend bool is_needed_for_output(frame const& f) { return f.needed_for_output; }
+  friend void mark_as_not_needed_for_output(frame& f) { f.needed_for_output = false; }
 };
 
 template<typename Buffer>
@@ -112,7 +122,7 @@ public:
 
   void new_picture(bool IdrPicFlag, picture_type pt, unsigned frame_num, bool has_mmco5, poc_t poc) {
     if(is_new_frame(IdrPicFlag, pt, frame_num, has_mmco5)) {
-      this->push_back(frame<Buffer>{frame_num, -1u, static_cast<structure_type>(pt)});
+      this->push_back(frame<Buffer>{frame_num, static_cast<structure_type>(pt)});
     }
     else
       this->back().structure = structure_type::pair;
