@@ -44,7 +44,9 @@ struct poc_decoder {
     log2_max_pic_order_cnt_lsb_minus4(sps.log2_max_pic_order_cnt_lsb_minus4),
     offset_for_non_ref_pic(sps.offset_for_non_ref_pic),
     offset_for_top_to_bottom_field(sps.offset_for_top_to_bottom_field),
-    offset_for_ref_frame(sps.offset_for_ref_frame)
+    offset_for_ref_frame(sps.offset_for_ref_frame),
+    prevPicOrderCntLsb(0),
+    prevPicOrderCntMsb(0)
   {}
 
   unsigned MaxFrameNum() const { return 1 << (log2_max_frame_num_minus4 + 4); } 
@@ -548,7 +550,6 @@ struct dec_ref_pic_marker {
     }
   }
 };
-
 
 } // namespace h264
 
