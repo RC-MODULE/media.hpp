@@ -551,6 +551,12 @@ struct dec_ref_pic_marker {
   }
 };
 
+// C.4.4 Removal of pictures from the DPB before possible insertion of the current picture
+template<typename I>
+I remove_unused_pictures(I begin, I end) {
+  return std::remove_if(begin, end, [](decltype(*begin) v) { return !is_needed_for_output(v) && !is_short_term_reference(v) && !is_long_term_reference(v); });
+}
+
 } // namespace h264
 
 #endif
