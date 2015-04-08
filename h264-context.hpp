@@ -3,6 +3,7 @@
 
 #include "h264-dpb.hpp"
 
+namespace media {
 namespace h264 {
 
 template<typename FrameBuffer>
@@ -81,6 +82,7 @@ private:
   bool recovery_point = false;
 };
 
+}
 }
 
 #endif

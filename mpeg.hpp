@@ -7,6 +7,7 @@
 
 #include "bitstream.hpp"
 
+namespace media {
 namespace mpeg {
 
 struct parse_error : std::exception {
@@ -151,7 +152,7 @@ struct picture_header_t {
 
 template<typename S>
 picture_header_t picture_header(S&& s) {
-  picture_header_t h;
+  picture_header_t h = {0};
   h.temporal_reference = u(s, 10);
   
   auto pic_code = u(s, 3);
@@ -319,7 +320,7 @@ I find_next_access_unit(I first, I last) {
   return find_sequence_or_picture_header(first, last);
 }
 
-}
+}}
 
 #endif
 

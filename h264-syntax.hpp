@@ -7,6 +7,7 @@
 #include "utils.hpp"
 #include "bitstream.hpp"
 
+namespace media {
 namespace h264 {
 
 enum class nalu_type {
@@ -612,5 +613,5 @@ bool are_different_pictures(slice_identity_header const& a, slice_identity_heade
 }
 
 }
-
+}
 #endif

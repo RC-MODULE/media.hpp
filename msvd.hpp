@@ -9,10 +9,11 @@
 #include <asio.hpp>
 #include <asio/system_timer.hpp>
 #include "utils.hpp"
-#include "utils/utils/asio_ioctl.hpp"
+#include "utils/utils/asio_utils.hpp"
 #include <linux/msvdhd.h>
 #include "mvdu.hpp"
 
+namespace media {
 namespace msvd {
 
 struct decode_result {
@@ -62,8 +63,8 @@ struct mpeg_context {
   mpeg_context(
     mpeg::sequence_header_t const& sh,
     mpeg::picture_header_t const& ph,
-    mpeg::picture_coding_extension_t* pcx,
-    mpeg::quant_matrix_extension_t* qmx,
+    mpeg::picture_coding_extension_t const* pcx,
+    mpeg::quant_matrix_extension_t const* qmx,
     Buffer curpic,
     Buffer ref0,
     Buffer ref1,
@@ -180,8 +181,8 @@ auto async_decode_picture(
   decoder& d,
   mpeg::sequence_header_t const& sh,
   mpeg::picture_header_t const& ph,
-  mpeg::picture_coding_extension_t* pcx,
-  mpeg::quant_matrix_extension_t* qmx,
+  mpeg::picture_coding_extension_t const* pcx,
+  mpeg::quant_matrix_extension_t const* qmx,
   Buffer curpic,
   Buffer ref0,
   Buffer ref1,
@@ -199,9 +200,10 @@ namespace detail {
 
 msvd_picture_type to_msvd(h264::picture_type p) {
   switch(p) {
-  case h264::picture_type::frame: return msvd_picture_type_frame;
   case h264::picture_type::top: return msvd_picture_type_top;
   case h264::picture_type::bot: return msvd_picture_type_bot;
+  default:
+  case h264::picture_type::frame: return msvd_picture_type_frame;
   }
 }
 
@@ -360,7 +362,7 @@ auto async_decode_slice(decoder& d, std::unique_ptr<h264_context<S>> cx, F callb
   >> [mc](std::size_t bytes) {
     return decode_result{unwrap(mc)->result.num_of_decoded_mbs};
   }
-  += callback;
+  += [ctx, callback](std::error_code const& ec, msvd::decode_result const& r) mutable { callback(ec, r); };
 } 
 
 } // namespace detail
@@ -406,9 +408,9 @@ auto async_decode_slice(
   std::size_t slice_data_offset,
   Callback callback) -> typename std::enable_if<utils::is_callable<Callback(std::error_code, msvd::decode_result)>::value>::type 
 {
-  if(!cx.current_picture()->frame->buffer) {
+  if(!frame_buffer(*cx.current_picture()->frame)) {
     async_allocate(allocator, [=, &d, &cx](std::error_code const& ec, FrameBuffer buffer) {
-      cx.current_picture()->frame->buffer = std::move(buffer);
+      frame_buffer(*cx.current_picture()->frame, std::move(buffer));
       async_decode_slice(d, cx, slice_data, slice_data_offset, callback);
     });
   }
@@ -416,8 +418,8 @@ auto async_decode_slice(
     async_decode_slice(d, cx, slice_data, slice_data_offset, callback);
 }
 
-} // namespace msvd
-
+} //namespace msvd
+} //namespace media
 
 #endif
 

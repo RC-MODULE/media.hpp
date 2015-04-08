@@ -7,6 +7,7 @@
 #include <numeric>
 #include "h264-syntax.hpp"
 
+namespace media {
 namespace h264 {
 
 // 7.4.1.2.4 Detection of the first VCL NAL unit of a primary coded picture
@@ -567,5 +568,6 @@ I remove_unused_pictures(I begin, I end) {
 }
 
 } // namespace h264
+} // namespace media
 
 #endif

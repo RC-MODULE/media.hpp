@@ -6,6 +6,7 @@
 
 // default implementation of h264 decoded picture buffer
 
+namespace media {
 namespace h264 {
 
 enum class ref_type { none, short_term, long_term };
@@ -136,6 +137,7 @@ public:
   }
 };
 
+}
 
 }
 
