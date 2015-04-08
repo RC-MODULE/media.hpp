@@ -34,7 +34,6 @@ struct context : h264::decoded_picture_buffer<FrameBuffer> {
       break; }
     case nalu_type::slice_layer_non_idr:
     case nalu_type::slice_layer_idr: {
-      utils::timing_guard t(std::chrono::milliseconds(5));
       auto s = parse_slice_header(params, parser, h.nal_unit_type, h.nal_ref_idc);
       if(s) on_slice(std::move(*s));
       break; }
