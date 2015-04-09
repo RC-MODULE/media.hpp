@@ -214,7 +214,7 @@ public:
 template<typename I>
 bit_parser<I> make_bit_parser(utils::range<bit_iterator<I>> const& range) {
   return {range.begin(), range.end()};
-} 
+}
 
 template<typename A>
 unsigned ue(A& r) {
@@ -236,12 +236,6 @@ template<typename I>
 bool more_data(utils::range<bit_iterator<I>> const& r) { return r.end() != r.begin(); }
 
 const int startcode_length = 3;
-
-template<typename I>
-I find_startcode_prefix(I begin, I end) {
-  static const auto sc = {0,0,1};
-  return std::search(begin, end, sc.begin(), sc.end());
-}
 
 template<typename I>
 class remove_startcode_emulation_prevention_iterator {
@@ -417,6 +411,45 @@ template<typename C>
 auto make_asio_sequence_range(C& c) -> decltype(utils::make_range(make_asio_sequence_iterator(c.begin()), make_asio_sequence_iterator(c.end()))) {
   return utils::make_range(make_asio_sequence_iterator(c.begin()), make_asio_sequence_iterator(c.end()));
 }
+
+inline
+utils::range<std::uint8_t const*> make_asio_sequence_range(asio::const_buffers_1 const& buffers) {
+  return utils::make_range(asio::buffer_cast<std::uint8_t const*>(buffers), buffer_size(buffers));
+}
+
+template<typename I>
+I find_startcode_prefix(I begin, I end) {
+  static const auto sc = {0,0,1};
+  return std::search(begin, end, sc.begin(), sc.end());
+}
+
+template<typename AsioConstBufferSequence>
+std::size_t find_startcode_prefix(AsioConstBufferSequence const& buffer, std::size_t pos) {
+  auto r = make_asio_sequence_range(buffer);
+  return find_startcode_prefix(r.begin() + pos, r.end())- r.begin();
+}
+
+template<typename AsioConstBufferSequence>
+struct nalu_reader {
+  AsioConstBufferSequence sequence;
+  size_t pos;
+
+  friend AsioConstBufferSequence next(nalu_reader& r) {
+    auto pos = r.pos;
+    if(pos == buffer_size(r.sequence)) return subsequence(r.sequence, pos, 0);
+    r.pos = find_startcode_prefix(r.sequence, pos + startcode_length);
+
+    return subsequence(r.sequence, pos, r.pos - pos);
+  }
+
+  friend AsioConstBufferSequence rest(nalu_reader const& r) { return subsequence(r.sequence, r.pos, buffer_size(r.sequence) - r.pos); }
+};
+
+template<typename AsioConstBufferSequence>
+nalu_reader<AsioConstBufferSequence> make_nalu_reader(AsioConstBufferSequence const& s) {
+  return nalu_reader<AsioConstBufferSequence>{s, find_startcode_prefix(s, 0)};
+}
+
 
 inline
 asio::const_buffers_1 adjust_sequence(asio::const_buffers_1 const& buffer, std::size_t offset, std::size_t length) {
