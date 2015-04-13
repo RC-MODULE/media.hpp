@@ -423,6 +423,17 @@ I find_startcode_prefix(I begin, I end) {
   return std::search(begin, end, sc.begin(), sc.end());
 }
 
+template<typename I>
+I find_next_startcode_prefix(I begin, I end) {
+  auto i = find_startcode_prefix(begin, end);
+  if(i != end) {
+    std::advance(i, 3);
+    i = find_startcode_prefix(i, end);
+  }
+
+  return i;
+}
+
 template<typename AsioConstBufferSequence>
 std::size_t find_startcode_prefix(AsioConstBufferSequence const& buffer, std::size_t pos) {
   auto r = make_asio_sequence_range(buffer);
@@ -529,5 +540,10 @@ std::vector<iovec> adapt_adjusted_sequence(asio_sequence_iterator<typename C::co
   return r;
 }
 
+template<typename BS>
+auto adapt_sequence(BS const& bs) -> std::enable_if_t<utils::is_byte_sequence<BS>::value, decltype(adapt_sequence(as_asio_sequence(bs)))> {
+  return adapt_sequence(as_asio_sequence(bs));
+}
 }
 #endif
+
