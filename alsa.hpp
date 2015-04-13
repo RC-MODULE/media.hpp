@@ -56,14 +56,15 @@ public:
     descriptor_write_op_base* o(static_cast<descriptor_write_op_base*>(base));
 
     int r = snd_pcm_writei(o->buffer.handle, asio::buffer_cast<void const*>(o->buffer.buffer), asio::buffer_size(o->buffer.buffer) / 4);
-    o->ec_ = r < 0 ? std::error_code(r, ALSA::error_category()) : std::error_code();
+    if(r < 0 && r != -EAGAIN)
+      r = snd_pcm_recover(o->buffer.handle, r, 0);
+ 
+    o->ec_ = r < 0 ? std::error_code(-r, ALSA::error_category()) : std::error_code();
+    
     if(!o->ec_)
       o->bytes_transferred_ = 2*sizeof(std::int16_t)*r;
 
-    if(r < 0 && r != -EAGAIN) {
-      snd_pcm_recover(o->buffer.handle, r, 0);
-    }
-    return std::size_t(r) == asio::buffer_size(o->buffer.buffer) / 4; 
+    return r != -EAGAIN; 
   }
 private:
   ALSA::Details::PcmWriteBuffer buffer;
