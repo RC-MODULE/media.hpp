@@ -10,6 +10,14 @@
 namespace media {
 namespace h264 {
 
+struct nal_unit_tag {};
+template<typename BS>
+using nal_unit = utils::tagged_byte_sequence<nal_unit_tag, BS>;
+
+struct bytestream_nal_unit_tag {};
+template<typename BS>
+using bytestream_nal_unit = utils::tagged_byte_sequence<bytestream_nal_unit_tag, BS>;
+
 enum class nalu_type {
   slice_layer_non_idr           = 1,
   slice_data_partition_a_layer  = 2,
