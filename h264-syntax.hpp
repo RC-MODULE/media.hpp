@@ -14,9 +14,31 @@ struct nal_unit_tag {};
 template<typename BS>
 using nal_unit = utils::tagged_byte_sequence<nal_unit_tag, BS>;
 
-struct bytestream_nal_unit_tag {};
+namespace annexb {
+
+struct nal_unit_tag {};
 template<typename BS>
-using bytestream_nal_unit = utils::tagged_byte_sequence<bytestream_nal_unit_tag, BS>;
+using nal_unit = utils::tagged_byte_sequence<nal_unit_tag, BS>;
+
+template<typename BS>
+auto to_nal_unit(nal_unit<BS> n) -> decltype(utils::tag<h264::nal_unit_tag>(split(std::move(n), begin(n)).second)) {
+  auto i = begin(n);
+  std::advance(i, 3);
+  return utils::tag<h264::nal_unit_tag>(split(std::move(n), i).second);
+}
+
+struct access_unit_tag {};
+template<typename BS>
+using access_unit = utils::tagged_byte_sequence<access_unit_tag, BS>;
+
+template<typename BS>
+auto next_nal_unit(access_unit<BS> au) {
+  auto i = bitstream::find_next_startcode_prefix(begin(au), end(au));
+  auto r = split(std::move(au), i);
+  return std::make_pair(utils::tag<nal_unit_tag>(std::move(r.first)), utils::tag<access_unit_tag>(std::move(r.second)));
+}
+
+}
 
 enum class nalu_type {
   slice_layer_non_idr           = 1,
