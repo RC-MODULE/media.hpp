@@ -56,16 +56,16 @@ struct header {
 };
 
 template<typename Stream>
-auto read_packet(Stream&& s, asio::streambuf& buffer, std::size_t pos = 0) -> decltype(buffer.data()) {
+packet<utils::range<std::uint8_t const*>> read_packet(Stream&& s, asio::streambuf& buffer, std::size_t pos = 0) {
   for(;;) {
     auto d = buffer.data();
     if(buffer_size(d) < packet_length + pos) {
       auto n = s(buffer.prepare(packet_length*1000));
-      if(n == 0) return subsequence(buffer.data(), 0, 0);
+      if(n == 0) return utils::tag<packet_tag>(utils::make_range<std::uint8_t const*>(nullptr, nullptr));
       buffer.commit(n);
     }
     else
-      return subsequence(buffer.data(), pos, packet_length);
+      return utils::tag<packet_tag>(utils::make_range(asio::buffer_cast<std::uint8_t const*>(buffer.data()) + pos, packet_length));
   }
 }
 
@@ -171,7 +171,7 @@ I data(I first, I last) {
   if(stream_id < 0xbc) throw std::system_error(make_error_code(errc::invalid_stream_id));
 
   auto PES_packet_length = u(parser, 16);
-  if(PES_packet_length + 4 > last - first) throw std::system_error(make_error_code(errc::invalid_packet_length));
+  if(PES_packet_length + 4 > std::size_t(last - first)) throw std::system_error(make_error_code(errc::invalid_packet_length));
  
   switch(static_cast<streamid>(stream_id)) {
   case streamid::padding_stream:
@@ -202,7 +202,7 @@ timestamp pts(I first, I last) {
   if(stream_id < 0xbc) throw std::system_error(make_error_code(errc::invalid_stream_id));
 
   auto PES_packet_length = u(parser, 16);
-  if(PES_packet_length + 4 > last - first) throw std::system_error(make_error_code(errc::invalid_packet_length));
+  if(PES_packet_length + 4 > std::size_t(last - first)) throw std::system_error(make_error_code(errc::invalid_packet_length));
  
   switch(static_cast<streamid>(stream_id)) {
   case streamid::padding_stream:
@@ -309,8 +309,8 @@ struct buffered_reader {
 
 template<typename Source, std::size_t N>
 struct demuxer {
-  demuxer(Source source, int pids[N]) : source(std::move(source)) {
-    for(auto i = 0; i != channels.size(); ++i) channels[i].pid = pids[i];
+  demuxer(Source source, unsigned pids[N]) : source(std::move(source)) {
+    for(std::size_t i = 0; i != channels.size(); ++i) channels[i].pid = pids[i];
   }
 
   using packet_type = pes::packet<std::vector<std::uint8_t>>;
@@ -322,9 +322,10 @@ struct demuxer {
   bool eof = false;
 
   struct channel {
-    int pid;
+    unsigned pid;
     pes::packet_assembler assembler;
-    utils::promise<packet_type> promise;
+    //utils::promise<packet_type> promise;
+    utils::future_queue<packet_type> queue;   
 
     template<typename BS>
     bool operator()(ts::packet<BS> const& p) {
@@ -341,9 +342,7 @@ struct demuxer {
     }
 
     void set(packet_type p) {
-      utils::promise<packet_type> t;
-      std::swap(t, promise);
-      t.set_value(std::move(p));
+      queue.push(std::move(p));
     }
   };
 
@@ -366,14 +365,13 @@ struct demuxer {
     }
   }
 
-  friend utils::future<packet_type> pull(demuxer& d, int pid) noexcept {
+  friend utils::future<packet_type> pull(demuxer& d, unsigned pid) noexcept {
     try {
       auto i = std::find_if(d.channels.begin(), d.channels.end(), [&](auto& x) { return x.pid == pid; });
       if(i == d.channels.end()) throw std::range_error("pid out of range");
 
-      auto f = i->promise.get_future(); 
       d.read();
-      return f;
+      return i->queue.pop();
     }
     catch(...) {
       return utils::make_exceptional_future<packet_type>(std::current_exception());
@@ -383,7 +381,7 @@ struct demuxer {
 
 template<typename Source, typename... Pids>
 demuxer<buffered_reader<Source, 100>, sizeof...(Pids)> make_demuxer(Source src, Pids... pids) {
-  int a[] = {pids...};
+  unsigned a[] = {pids...};
   return demuxer<buffered_reader<Source, 100>, sizeof...(Pids)>(std::move(src), a);
 }
 
