@@ -32,7 +32,7 @@ template<typename BS>
 using access_unit = utils::tagged_byte_sequence<access_unit_tag, BS>;
 
 template<typename BS>
-auto next_nal_unit(access_unit<BS> au) {
+auto next_nal_unit(access_unit<BS> au) -> std::pair<nal_unit<decltype(split(std::move(au), begin(au)).first)>, access_unit<decltype(split(std::move(au), begin(au)).second)>> {
   auto i = bitstream::find_next_startcode_prefix(begin(au), end(au));
   auto r = split(std::move(au), i);
   return std::make_pair(utils::tag<nal_unit_tag>(std::move(r.first)), utils::tag<access_unit_tag>(std::move(r.second)));
