@@ -37,15 +37,23 @@ struct context : h264::decoded_picture_buffer<FrameBuffer> {
       auto s = parse_slice_header(params, parser, h.nal_unit_type, h.nal_ref_idc);
       if(s) on_slice(std::move(*s));
       break; }
+    default:
+      break;
     }
 
     return bitstream::bit_iterator<I>{parser.begin().base().base(), int(parser.begin().shift())};
   }
 
-  template<typename BufferSequence>
-  std::size_t operator()(BufferSequence s) {
-    auto r = bitstream::make_asio_sequence_range(s);
-    return (*this)(r) - r.begin();
+  template<typename BS>
+  std::size_t operator()(nal_unit<BS> const& data) {
+    return (*this)(utils::make_range(begin(data), end(data))) - begin(data);
+  }
+
+  template<typename BS>
+  std::size_t operator()(annexb::nal_unit<BS> const& data) {
+    auto i = bitstream::find_startcode_prefix(begin(data), end(data));
+    std::advance(i, 3);
+    return (*this)(utils::make_range(i, end(data))) - begin(data);
   }
 
   bool is_new_picture() const { return new_pic_flag; }
