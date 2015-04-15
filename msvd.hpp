@@ -31,6 +31,14 @@ struct buffer_traits<std::shared_ptr<mvdu::buffer<U>>> {
   static constexpr std::uint32_t chroma_offset = mvdu::buffer_chroma_offset;
 };
 
+template<typename U>
+struct buffer_traits<utils::shared_future<std::shared_ptr<mvdu::buffer<U>>>> {
+  static constexpr std::uint32_t width = mvdu::buffer_width;
+  static constexpr std::uint32_t height = mvdu::buffer_height;
+  static constexpr std::uint32_t luma_offset = 0;
+  static constexpr std::uint32_t chroma_offset = mvdu::buffer_chroma_offset;
+};
+
 struct decoder {
   decoder(asio::io_service& io) : fd(io) {
     fd.assign(::open("/dev/msvdhd", O_RDWR));
@@ -44,6 +52,11 @@ struct decoder {
 
 //mpeg decoding impl
 namespace detail {
+
+template<typename fb>
+auto phys_addr(utils::shared_future<fb> const& f) -> decltype(phys_addr(f.get())) {
+  return 0;
+}
 
 msvd_coding_type to_msvd(mpeg::picture_coding t) {
   switch(t) {
@@ -217,7 +230,7 @@ msvd_coding_type to_msvd(h264::coding_type p) {
 }
 
 template<typename Sequence> 
-struct h264_context : msvd_h264_decode_params {
+struct h264_context : public msvd_h264_decode_params, public msvd_decode_result {
   template<typename I, typename Frame>
   h264_context(
     h264::seq_parameter_set const& sps,
@@ -344,25 +357,32 @@ struct h264_context : msvd_h264_decode_params {
   msvd_h264_frame dpb_data[17];
   msvd_h264_picture_reference reflist_data[2][32];
   decltype(bitstream::adapt_sequence(std::declval<Sequence>())) buffers;
-
-  msvd_decode_result result;
 };
+
+template<typename Pr, typename Rs, typename F>
+auto async_decode_slice(decoder& d, Pr pr, Rs rs, F callback) -> std::enable_if_t<
+  std::is_convertible<decltype(*pr), msvd_h264_decode_params>::value
+  && std::is_convertible<decltype(*rs), msvd_decode_result>::value
+  && utils::is_callable<F(std::error_code)>::value>
+{
+  msvd_h264_decode_params const* params = &*pr;
+  msvd_decode_result* result = &*rs;
+
+  utils::async_write_some(d.fd, utils::make_ioctl_write_buffer<MSVD_DECODE_H264_SLICE>(std::ref(*params)))
+  >> [&d, result, mpr = utils::move_on_copy(std::move(pr))](std::size_t) {
+    return utils::async_read_some(d.fd, asio::mutable_buffers_1(result, sizeof(*result)));
+  }
+  += [callback = utils::move_on_copy(std::move(callback)), r = utils::move_on_copy(rs)](std::error_code const ec, std::size_t) mutable { callback(ec); };
+}
 
 template<typename S, typename F>
 auto async_decode_slice(decoder& d, std::unique_ptr<h264_context<S>> cx, F callback) ->
   typename std::enable_if<utils::is_callable<F(std::error_code, msvd::decode_result)>::value>::type
 {
-  auto ctx = cx.get();
-  auto mc = utils::move_on_copy(std::move(cx));
-
-  utils::async_write_some(d.fd, utils::make_ioctl_write_buffer<MSVD_DECODE_H264_SLICE>(std::ref(*ctx)))
-  >> [ctx,&d](std::size_t) {
-    return utils::async_read_some(d.fd, asio::mutable_buffers_1(&ctx->result, sizeof(ctx->result)));
-  }
-  >> [mc](std::size_t bytes) {
-    return decode_result{unwrap(mc)->result.num_of_decoded_mbs};
-  }
-  += [ctx, callback](std::error_code const& ec, msvd::decode_result const& r) mutable { callback(ec, r); };
+  auto r = cx.get();
+  async_decode_slice(d, r, r, [=, r = std::move(cx)](std::error_code const& ec) mutable {
+    callback(ec, decode_result{r->num_of_decoded_mbs});
+  });
 } 
 
 } // namespace detail
