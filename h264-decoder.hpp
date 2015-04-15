@@ -6,6 +6,7 @@
 #include "utils/utils/byte-sequence.hpp"
 #include "h264-context.hpp"
 
+#include <typeinfo>
 #include <type_traits>
 
 namespace media {
@@ -25,11 +26,8 @@ template<typename S>
 auto async_decode_slice(decoder& d, std::unique_ptr<detail::h264_context<S>> cx) {
   utils::promise<decode_result> p;
   auto f = p.get_future();
-
-  std::cout << "decoding" << std::endl;
-
+  
   async_decode_slice(d, std::move(cx), [p = utils::move_on_copy(std::move(p))](std::error_code const& ec, decode_result const& r) mutable {
-    std::cout << "decoded" << std::endl;
     unwrap(p).set_value(r);
   });
 
@@ -48,7 +46,7 @@ utils::future<decode_result> async_decode_slice(decoder& d, h264::context<utils:
 
   return when_all(frames.begin(), frames.end()).then([&d, p = std::move(p)](auto ff) mutable {
     auto frames = ff.get();
-    for(int i = 0; i != frames.size(); ++i)
+    for(auto i = 0u; i != frames.size(); ++i)
       p->dpb_data[i].phys_addr = phys_addr(frames[i].get());
     
     p->curr_pic.phys_addr = phys_addr(frames.back().get());
@@ -78,13 +76,8 @@ struct decoder {
     try {
       std::vector<utils::future<msvd::decode_result>> slices;
 
-      auto i = bitstream::find_startcode_prefix(begin(au), end(au));
-      auto r = split(std::move(au), i);
-      for(;begin(r.second) != end(r.second);) {
-        i = bitstream::find_next_startcode_prefix(begin(r.second), end(r.second));
-        r = split(std::move(r.second), i);
-     
-        auto pos = d.cx(utils::tag<nalu_tag>(r.first));
+      for(auto r = next_nal_unit(std::move(au)); !empty(r.first); r = next_nal_unit(std::move(r.second))) {
+        auto pos = d.cx(r.first);
         if(d.cx.is_new_slice()) {
           if(d.cx.is_new_picture() && pic_type(*d.cx.current_picture()) != picture_type::bot)
             frame_buffer(*d.cx.current_picture()->frame, pull(d.frame_source, ts));
@@ -101,11 +94,7 @@ struct decoder {
 
         d.cx.erase(h264::remove_unused_pictures(d.cx.begin(), d.cx.current_picture()->frame), d.cx.current_picture()->frame);      
       }
-
-      return when_all(slices.begin(), slices.end()).then([](auto f){
-        for(auto& s: f.get())
-          std::cout << "decoded " << s.get().num_of_decoded_macroblocks << " mbs" << std::endl;
-      });
+      return when_all(slices.begin(), slices.end()).then([](auto f) {});
     }
     catch(...) {
       return utils::make_exceptional_future<void>(std::current_exception());
