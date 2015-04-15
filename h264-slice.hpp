@@ -46,8 +46,8 @@ struct poc_decoder {
     offset_for_non_ref_pic(sps.offset_for_non_ref_pic),
     offset_for_top_to_bottom_field(sps.offset_for_top_to_bottom_field),
     offset_for_ref_frame(sps.offset_for_ref_frame),
-    prevPicOrderCntLsb(0),
-    prevPicOrderCntMsb(0)
+    prevPicOrderCntMsb(0),
+    prevPicOrderCntLsb(0)
   {}
 
   unsigned MaxFrameNum() const { return 1 << (log2_max_frame_num_minus4 + 4); } 
