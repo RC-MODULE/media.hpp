@@ -99,7 +99,7 @@ constexpr video_mode construct_video_mode(int height, int framerate, bool progre
 }
 
 inline
-constexpr bool is_valid_video_mode(int _height, int _rate, bool progressive, bool hd) {
+constexpr bool is_valid_video_mode(unsigned _height, int _rate, bool progressive, bool hd) {
   return 
     height(construct_video_mode(_height, _rate, progressive, hd)) == _height 
     && framerate(construct_video_mode(_height, _rate, progressive, hd)) == _rate

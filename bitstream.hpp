@@ -200,7 +200,7 @@ public:
 
   friend std::size_t clz(bit_parser& bits) {
     for(;;) {
-      auto n = __builtin_clz(bits.accumulator);
+      unsigned n = __builtin_clz(bits.accumulator);
       if(n < available(bits)) {
         u(bits, n);
         return n;
