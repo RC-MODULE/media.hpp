@@ -200,6 +200,10 @@ struct sink {
     b.then([&](auto f) { push(s, b.get()); });
   }
 
+  friend void push(sink& s, timestamp const& ts, utils::shared_future<buffer> b) {
+    push(s, std::move(b));
+  }
+
   static constexpr std::uint32_t buffer_size = MVDU_VIDEO_MAX_BUFFER_SIZE; 
   static constexpr std::uint32_t buffer_width = 1920;
   static constexpr std::uint32_t buffer_height = 1088;
