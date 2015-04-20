@@ -32,11 +32,11 @@ struct buffer_traits<std::shared_ptr<mvdu::buffer<U>>> {
 };
 
 template<typename U>
-struct buffer_traits<utils::shared_future<std::shared_ptr<mvdu::buffer<U>>>> {
-  static constexpr std::uint32_t width = mvdu::buffer_width;
-  static constexpr std::uint32_t height = mvdu::buffer_height;
-  static constexpr std::uint32_t luma_offset = 0;
-  static constexpr std::uint32_t chroma_offset = mvdu::buffer_chroma_offset;
+struct buffer_traits<utils::shared_future<U>> {
+  static constexpr std::uint32_t width = buffer_traits<U>::width;
+  static constexpr std::uint32_t height = buffer_traits<U>::height;
+  static constexpr std::uint32_t luma_offset = buffer_traits<U>::luma_offset;
+  static constexpr std::uint32_t chroma_offset = buffer_traits<U>::chroma_offset;
 };
 
 struct decoder {
