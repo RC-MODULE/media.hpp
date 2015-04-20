@@ -10,5 +10,6 @@
 #include "h264-slice.hpp"
 #include "h264-context.hpp"
 #include "mpeg-decoder.hpp"
+#include "h264-decoder.hpp"
 
 #endif
