@@ -59,6 +59,17 @@ utils::future<decode_result> async_decode_slice(decoder& d, h264::context<utils:
 
 namespace h264 {
 
+video::resolution get_resolution(seq_parameter_set const& sps) {
+  return {(sps.pic_width_in_mbs_minus1 + 1) * 16, (sps.pic_height_in_map_units_minus1 + 1) * (2 - sps.frame_mbs_only_flag) * 16};
+}
+
+video::aspect_ratio get_aspect_ratio(seq_parameter_set const& sps) {
+  auto aspect_ratio = 1.0;
+  if(sps.vui_parameters && sps.vui_parameters->aspect_ratio_information)
+    aspect_ratio = double(sps.vui_parameters->aspect_ratio_information->sar_width) / sps.vui_parameters->aspect_ratio_information->sar_width;
+  return {aspect_ratio};
+}
+
 template<typename Source, typename Sink>
 struct decoder {
   msvd::decoder hw;
@@ -67,9 +78,11 @@ struct decoder {
 
   decoder(asio::io_service& io, Source src, Sink sink) : hw(io), frame_source(std::move(src)), sink(std::move(sink)) {}
 
-  using frame_type = std::decay_t<decltype(pull(frame_source, timestamp{}))>;
+  using frame_type = std::decay_t<decltype(pull(frame_source))>;
 
   context<frame_type> cx;
+
+  utils::optional<std::pair<video::resolution, video::aspect_ratio>> dimensions;
 
   template<typename BS>
   friend utils::future<void> push(decoder& d, timestamp const& ts, annexb::access_unit<BS> au) noexcept {
@@ -80,7 +93,7 @@ struct decoder {
         auto pos = d.cx(r.first);
         if(d.cx.is_new_slice()) {
           if(d.cx.is_new_picture() && pic_type(*d.cx.current_picture()) != picture_type::bot)
-            frame_buffer(*d.cx.current_picture()->frame, pull(d.frame_source, ts));
+            frame_buffer(*d.cx.current_picture()->frame, pull(d.frame_source));
          
           slices.push_back(async_decode_slice(d.hw, d.cx, utils::tag<coded_slice_tag>(std::move(r.first)), pos));
         }
@@ -88,7 +101,11 @@ struct decoder {
 
       if(!slices.empty()) {
         if(pic_type(*d.cx.current_picture()) != picture_type::top) {
-          push(d.sink, frame_buffer(*d.cx.current_picture()));
+          auto m = std::make_pair(get_resolution(d.cx.sps()), get_aspect_ratio(d.cx.sps()));
+          if(!d.dimensions || m != *d.dimensions) set_dimensions(d.sink, m.first, m.second);
+          d.dimensions = m;
+
+          push(d.sink, ts, frame_buffer(*d.cx.current_picture()));
           mark_as_not_needed_for_output(*d.cx.current_picture()->frame);
         }
 
