@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <functional>
 
+#include "types.hpp"
+
 namespace media {
 
 struct system_clock {
@@ -40,7 +42,6 @@ struct system_clock {
 
   template<typename C>
   friend void schedule(system_clock& clk, timestamp ts, C c) {
-    std::cout << "clock now:" << now(clk).count() << ", ts" << ts.count() << std::endl; 
     auto v = std::make_pair(ts, std::function<void()>(utils::move_on_copy(std::move(c))));
     clk.agenda.insert(std::lower_bound(clk.agenda.begin(), clk.agenda.end(), v, [](auto& a, auto& b) { return a.first < b.first; }), std::move(v));
     
@@ -48,7 +49,6 @@ struct system_clock {
   }
   
   friend void sync(system_clock& clk, timestamp ts) {
-    std::cout << "clock sync: " << ts.count() << std::endl;
     clk.epoch = std::chrono::system_clock::now() - std::chrono::duration_cast<std::chrono::system_clock::duration>(ts);
     clk.set_timer();
   }
@@ -62,6 +62,27 @@ struct system_clock {
   std::vector<std::pair<timestamp, std::function<void()>>> agenda;
   asio::system_timer timer;
 };
+
+template<typename Clock, typename Sink>
+struct clocked_sink {
+  Clock clk;
+  Sink sink;
+
+  template<typename Data> 
+  friend void push(clocked_sink& sk, media::timestamp ts, Data data) {
+    schedule(sk.clk, ts, [data = utils::move_on_copy(std::move(data)), sink = sk.sink] () mutable { push(sink, std::move(unwrap(data))); });
+  }
+
+  template<typename... Args>
+  friend void set_dimensions(clocked_sink& sk, Args&&... args) {
+    set_dimensions(sk.sink, std::forward<Args>(args)...);
+  }
+};
+
+template<typename Clock, typename Sink>
+clocked_sink<Clock, Sink> make_clocked_sink(Clock clk, Sink sk) {
+  return {clk, sk};
+}
 
 }
 #endif
