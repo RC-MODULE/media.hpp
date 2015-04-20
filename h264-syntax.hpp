@@ -77,7 +77,7 @@ bool more_rbsp_data(A& a) {
 
   auto n = bits_until_byte_aligned(a);
   if(n == 0) n = 8;
-  return next_bits(a, n) != (1 << (n - 1));
+  return next_bits(a, n) != (1u << (n - 1));
 }
 
 struct nal_unit_header {
@@ -99,6 +99,14 @@ nal_unit_header parse_nal_unit_header(Parser& a) {
 struct scaling_lists {
   std::array<std::array<std::uint8_t, 16>,6> lists_4x4;
   std::array<std::array<std::uint8_t, 64>,6> lists_8x8;
+};
+
+struct vui_params {
+  struct aspect_ratio {
+    std::uint16_t sar_width;
+    std::uint16_t sar_height;
+  };
+  utils::optional<aspect_ratio> aspect_ratio_information;
 };
 
 struct seq_parameter_set {
@@ -146,6 +154,8 @@ struct seq_parameter_set {
   unsigned  frame_crop_right_offset = 0;
   unsigned  frame_crop_top_offset = 0;
   unsigned  frame_crop_bottom_offset =0;
+
+  utils::optional<vui_params> vui_parameters; 
 };
 
 inline unsigned ChromaArrayType(seq_parameter_set const& sps) {
@@ -363,6 +373,37 @@ void parse_scaling_lists(Source& a, unsigned chroma_idc,
 }
 
 template<typename Parser>
+vui_params parse_vui(Parser& a) {
+  vui_params s;
+  if(u(a, 1)) {
+    auto aspect_ratio_idc = u(a, 8);
+    vui_params::aspect_ratio ari = {1,1};
+    if(aspect_ratio_idc == 2) ari = {12,11};
+    if(aspect_ratio_idc == 3) ari = {10,11};
+    if(aspect_ratio_idc == 4) ari = {16,11};
+    if(aspect_ratio_idc == 5) ari = {40,33};
+    if(aspect_ratio_idc == 6) ari = {24,11};
+    if(aspect_ratio_idc == 7) ari = {20,11};
+    if(aspect_ratio_idc == 8) ari = {32,11};
+    if(aspect_ratio_idc == 9) ari = {80,33};
+    if(aspect_ratio_idc == 10) ari = {18,11};
+    if(aspect_ratio_idc == 11) ari = {15,11};
+    if(aspect_ratio_idc == 12) ari = {64,33};
+    if(aspect_ratio_idc == 13) ari = {160,99}; 
+    if(aspect_ratio_idc == 14) ari = {4,3};
+    if(aspect_ratio_idc == 15) ari = {3,2};
+    if(aspect_ratio_idc == 16) ari = {2,1};
+    if(aspect_ratio_idc == 255) {
+      std::uint16_t w = u(a, 16);
+      std::uint16_t h = u(a, 16);
+      ari = {w, h};
+    }
+    s.aspect_ratio_information = ari;
+  }
+  return s;
+}
+
+template<typename Parser>
 seq_parameter_set parse_sps(Parser& a) {
   seq_parameter_set sps;
   sps.profile_idc = u(a, 8);
@@ -425,6 +466,9 @@ seq_parameter_set parse_sps(Parser& a) {
     sps.frame_crop_bottom_offset = ue(a);
   }
   // vui_parameter_present
+  if(u(a, 1)) 
+    sps.vui_parameters = parse_vui(a);
+  
   return sps;
 }
 
