@@ -1,10 +1,7 @@
 #include "msvd.hpp"
-#include "utils/utils/byte-sequence.hpp"
+#include "video.hpp"
 
-namespace media {
-
-namespace mpeg {
-using namespace ::mpeg;
+namespace media {namespace mpeg {
 
 struct access_unit_tag {};
 template<typename Data>
@@ -20,10 +17,8 @@ using picture_data = utils::tagged_byte_sequence<picture_data_tag, Data>;
 
 }
 
-using timestamp = std::chrono::duration<std::int64_t, std::ratio<1, 90000>>;
-}
-
 namespace msvd {
+
 template<typename Buffer, typename Data>
 utils::future<void> async_decode_picture(decoder& d, 
   mpeg::sequence_header_t const& sh,
@@ -37,9 +32,7 @@ utils::future<void> async_decode_picture(decoder& d,
 {
   auto p = std::make_shared<utils::promise<void>>();
   auto s = as_asio_sequence(data);
-  std::cout << "decoding" << std::endl;
   async_decode_picture(d, sh, ph, pcx, qmx, std::move(curpic), std::move(ref1), std::move(ref2), s, [p, d = std::move(data)](std::error_code const& ec, decode_result r) {
-    std::cout << "decoded:" << std::distance(begin(d), end(d)) << " bytes " << r.num_of_decoded_macroblocks << std::endl;
     if(ec)
       p->set_exception(std::make_exception_ptr(std::system_error(ec)));
     else
@@ -71,7 +64,7 @@ utils::future<void> async_decode_picture(decoder& d,
 }
 }
 
-namespace media { namespace mpeg {
+namespace mpeg {
 
 template<typename Allocator, typename Sink>
 struct decoder {
@@ -81,7 +74,7 @@ struct decoder {
 
   decoder(asio::io_service& io, Allocator fsrc, Sink sk) : hw(io), frame_source(fsrc), sink(sk) {}
 
-  using frame_type = std::decay_t<decltype(pull(frame_source, timestamp{}))>;
+  using frame_type = std::decay_t<decltype(pull(frame_source))>;
 
   struct stored_frame {
     mpeg::picture_type pt;
@@ -133,18 +126,18 @@ struct decoder {
   }
 
   template<typename Data>
-  void decode_picture(timestamp ts, picture_data<Data> data) {
+  auto decode_picture(timestamp ts, picture_data<Data> data) {
     auto p = parse_picture(std::move(data));
 
     auto pt = p.pcx ? p.pcx->picture_structure : mpeg::picture_type::frame;
-    ts += p.ph.temporal_reference * std::chrono::milliseconds(40);
+    //ts += p.ph.temporal_reference * std::chrono::milliseconds(40);
 
     if(frames[0] && frames[0]->pt != mpeg::picture_type::frame) {
       assert(is_opposite(frames[0]->pt, pt));
       frames[0]->pt = mpeg::picture_type::frame;
     }
     else
-      frames[0] = stored_frame{pt, pull(frame_source, ts)};
+      frames[0] = stored_frame{pt, pull(frame_source)};
   
     auto f = msvd::async_decode_picture(hw, *sh, p.ph, p.pcx, p.qmx,
       frames[0]->frame, frames[1] ? frames[1]->frame : frame_type(), frames[2] ? frames[2]->frame : frame_type(),
@@ -152,29 +145,38 @@ struct decoder {
     );
     
     if(frames[0]->pt == mpeg::picture_type::frame) {
-      f.then([frame = frames[0]->frame, sink = sink](auto f) { push(sink, frame); });
+      f = f.then([=, frame = frames[0]->frame, sink = sink](auto f) mutable {
+        push(sink, ts, frame);
+        return f;
+      });
  
       if(p.ph.picture_coding_type != mpeg::picture_coding::B) std::move_backward(&frames[0], &frames[2], &frames[3]);
     }
+
+    return f;
   }
 
   template<typename Data>
-  friend void push(decoder& d, timestamp ts, access_unit<Data> data) {
-    auto p = split(std::move(data), find_next_sequence_or_picture_header(begin(data), end(data)));
+  friend utils::future<void> push(decoder& d, timestamp ts, access_unit<Data> data) {
+    if(begin(data) == end(data)) return utils::make_ready_future();    
     
-    if(*(begin(p.first) + 3) == mpeg::sequence_header_code)
-      d.sh = mpeg::sequence_header(bitstream::make_bit_parser(bitstream::make_bit_range(utils::make_range(begin(p.first)+4, end(p.first)))));
-    else if(d.sh)
-      d.decode_picture(ts, utils::tag<picture_data_tag>(std::move(p.first)));
+    auto p = split(std::move(data), find_next_sequence_or_picture_header(begin(data), end(data)));
 
-    if(begin(p.second) != end(p.second))
-      push(d, ts, utils::tag<access_unit_tag>(std::move(p.second)));
+    if(*(begin(p.first) + 3) == mpeg::sequence_header_code) {
+      d.sh = mpeg::sequence_header(bitstream::make_bit_parser(bitstream::make_bit_range(utils::make_range(begin(p.first)+4, end(p.first)))));
+      set_dimensions(d.sink, video::resolution{d.sh->horizontal_size_value, d.sh->vertical_size_value}, video::aspect_ratio{1.0});
+    }
+    else if(d.sh) {
+      auto a = d.decode_picture(ts, utils::tag<picture_data_tag>(std::move(p.first)));
+      return when_all(
+        std::move(a),
+        push(d, ts, utils::tag<access_unit_tag>(std::move(p.second)))
+      ).then([](auto f) { f.get(); });
+    }
+
+    return push(d, ts, utils::tag<access_unit_tag>(std::move(p.second)));
   }
 };
-/*
-template<typename Source, typename Sink>
-auto make_decoder(asio::io_service& io, Source&& src, Sink&& sk) {
-  return decoder<std::decay_t<Source>, std::decay_t<Sink>>{io, std::forward<Source>(src), std::forward<Sink>(sk)};
+
 }
-*/
-}}
+}
