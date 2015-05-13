@@ -20,6 +20,8 @@ public:
   using value_type = bool;
   using difference_type = std::ptrdiff_t;
   using iterator_category = typename std::iterator_traits<I>::iterator_category;
+  using pointer = void;
+  using reference = void;
 
   bit_iterator() noexcept = default;
   bit_iterator(I i, int  offset = 0) noexcept : pos(i), offset(0) {
