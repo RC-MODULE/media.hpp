@@ -72,11 +72,11 @@ video::aspect_ratio get_aspect_ratio(seq_parameter_set const& sps) {
 
 template<typename Source, typename Sink>
 struct decoder {
-  msvd::decoder hw;
+  std::unique_ptr<msvd::decoder> hw;
   Source frame_source;
   Sink sink;
 
-  decoder(asio::io_service& io, Source src, Sink sink) : hw(io), frame_source(std::move(src)), sink(std::move(sink)) {}
+  decoder(asio::io_service& io, Source src, Sink sink) : hw(new msvd::decoder{io}), frame_source(std::move(src)), sink(std::move(sink)) {}
 
   using frame_type = std::decay_t<decltype(pull(frame_source))>;
 
@@ -85,7 +85,7 @@ struct decoder {
   utils::optional<std::pair<video::resolution, video::aspect_ratio>> dimensions;
 
   template<typename BS>
-  friend utils::future<void> push(decoder& d, timestamp const& ts, annexb::access_unit<BS> au) noexcept {
+  friend utils::shared_future<void> push(decoder& d, timestamp const& ts, annexb::access_unit<BS> au) noexcept {
     try {
       std::vector<utils::future<msvd::decode_result>> slices;
 
@@ -94,30 +94,41 @@ struct decoder {
         if(d.cx.is_new_slice()) {
           if(d.cx.is_new_picture() && pic_type(*d.cx.current_picture()) != picture_type::bot)
             frame_buffer(*d.cx.current_picture()->frame, pull(d.frame_source));
-         
-          slices.push_back(async_decode_slice(d.hw, d.cx, utils::tag<coded_slice_tag>(std::move(r.first)), pos));
+
+          slices.push_back(async_decode_slice(*d.hw, d.cx, utils::tag<coded_slice_tag>(std::move(r.first)), pos));
         }
       }
 
-      if(!slices.empty()) {
-        if(pic_type(*d.cx.current_picture()) != picture_type::top) {
-          auto m = std::make_pair(get_resolution(d.cx.sps()), get_aspect_ratio(d.cx.sps()));
-          if(!d.dimensions || m != *d.dimensions) set_dimensions(d.sink, m.first, m.second);
-          d.dimensions = m;
+      auto f = when_all(slices.begin(), slices.end());
+      utils::shared_future<void> r;
+    
+      if(d.cx.current_picture() && pic_type(*d.cx.current_picture()) != picture_type::top) {
+        auto m = std::make_pair(get_resolution(d.cx.sps()), get_aspect_ratio(d.cx.sps()));
+        if(!d.dimensions || m != *d.dimensions) set_dimensions(d.sink, m.first, m.second);
+        d.dimensions = m;
 
-          push(d.sink, ts, frame_buffer(*d.cx.current_picture()));
-          mark_as_not_needed_for_output(*d.cx.current_picture()->frame);
-        }
-
+//        r = f.then([frame = frame_buffer(*d.cx.current_picture()), ts, sink = d.sink](auto) mutable { push(sink, ts, frame); });
+        r = f.then([](auto f) {}).share();
+        push(d.sink, ts, r.then([frame = frame_buffer(*d.cx.current_picture())](auto) { return frame.get(); }).share());
+        mark_as_not_needed_for_output(*d.cx.current_picture()->frame);
+      
         d.cx.erase(h264::remove_unused_pictures(d.cx.begin(), d.cx.current_picture()->frame), d.cx.current_picture()->frame);      
-      }
-      return when_all(slices.begin(), slices.end()).then([](auto f) {});
+      } 
+      else
+        r = f.then([](auto f) {}).share();
+        
+      return r; 
     }
     catch(...) {
       return utils::make_exceptional_future<void>(std::current_exception());
     }
   }
 };
+
+template<typename Source, typename Sink>
+auto make_decoder(asio::io_service& io, Source src, Sink sk) {
+  return decoder<Source, Sink>(io, std::move(src), std::move(sk));
+}
 
 }} // namespace media { namespace h264 {
 #endif
