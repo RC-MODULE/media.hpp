@@ -74,10 +74,9 @@ inline picture_type opposite(picture_type pt) { return pt == picture_type::bot ?
 template<typename A>
 bool more_rbsp_data(A& a) { 
   if(!more_data(a)) return false;
-
-  auto n = bits_until_byte_aligned(a);
-  if(n == 0) n = 8;
-  return next_bits(a, n) != (1u << (n - 1));
+  auto n = std::distance(std::begin(a), std::end(a));
+  if(n < 32 && next_bits(a, n) == (1u << (n-1))) return false;
+  return true;
 }
 
 struct nal_unit_header {
