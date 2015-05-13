@@ -107,6 +107,13 @@ struct Playback {
       [=](std::error_code const& ec, std::size_t bytes) { cb(ec, bytes/sizeof(*frames)); });
   }
 
+  friend std::chrono::duration<snd_pcm_sframes_t, std::ratio<1, 48000>> delay(Playback& pb) {
+    snd_pcm_sframes_t d = 0;
+    snd_pcm_delay(pb.handle.get(), &d);
+
+    return std::chrono::duration<snd_pcm_sframes_t, std::ratio<1, 48000>>{d};
+  }
+
   ~Playback() { fd.release(); }
 
   Playback(Playback&&) = default;
