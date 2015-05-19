@@ -68,11 +68,11 @@ namespace mpeg {
 
 template<typename Allocator, typename Sink>
 struct decoder {
-  msvd::decoder hw;
+  std::unique_ptr<msvd::decoder> hw;
   Allocator frame_source;
   Sink sink; 
 
-  decoder(asio::io_service& io, Allocator fsrc, Sink sk) : hw(io), frame_source(fsrc), sink(sk) {}
+  decoder(asio::io_service& io, Allocator fsrc, Sink sk) : hw(new msvd::decoder(io)), frame_source(fsrc), sink(sk) {}
 
   using frame_type = std::decay_t<decltype(pull(frame_source))>;
 
@@ -139,7 +139,7 @@ struct decoder {
     else
       frames[0] = stored_frame{pt, pull(frame_source)};
   
-    auto f = msvd::async_decode_picture(hw, *sh, p.ph, p.pcx, p.qmx,
+    auto f = msvd::async_decode_picture(*hw, *sh, p.ph, p.pcx, p.qmx,
       frames[0]->frame, frames[1] ? frames[1]->frame : frame_type(), frames[2] ? frames[2]->frame : frame_type(),
       std::move(p.data)
     );
@@ -177,6 +177,12 @@ struct decoder {
     return push(d, ts, utils::tag<access_unit_tag>(std::move(p.second)));
   }
 };
+
+
+template<typename Source, typename Sink>
+auto make_decoder(asio::io_service& io, Source src, Sink sk) {
+  return decoder<Source, Sink>(io, std::move(src), std::move(sk));
+}
 
 }
 }
