@@ -11,7 +11,7 @@
 #include "utils.hpp"
 #include "utils/utils/asio_utils.hpp"
 #include <linux/msvdhd.h>
-#include "mvdu.hpp"
+#include "video.hpp"
 
 namespace media {
 namespace msvd {
@@ -22,14 +22,6 @@ struct decode_result {
 
 template<typename Buffer>
 struct buffer_traits;
-
-template<typename U>
-struct buffer_traits<std::shared_ptr<mvdu::buffer<U>>> {
-  static constexpr std::uint32_t width = mvdu::buffer_width;
-  static constexpr std::uint32_t height = mvdu::buffer_height;
-  static constexpr std::uint32_t luma_offset = 0;
-  static constexpr std::uint32_t chroma_offset = mvdu::buffer_chroma_offset;
-};
 
 template<typename U>
 struct buffer_traits<utils::shared_future<U>> {
@@ -174,17 +166,19 @@ template<typename B, typename S, typename F>
 auto async_decode_picture(decoder& d, std::unique_ptr<mpeg_context<B, S>> cx, F callback) ->
   typename std::enable_if<utils::is_callable<F(std::error_code, msvd::decode_result)>::value>::type
 {
-  auto ctx = cx.get();
   auto mc = utils::move_on_copy(std::move(cx));
-
-  utils::async_write_some(d.fd, utils::make_ioctl_write_buffer<MSVD_DECODE_MPEG_FRAME>(std::ref(ctx->params)))
-  >> [ctx,&d](std::size_t) { 
-    return utils::async_read_some(d.fd, asio::mutable_buffers_1(&ctx->result, sizeof(ctx->result)));
-  }
-  >> [mc](std::size_t bytes) {
-    return decode_result{unwrap(mc)->result.num_of_decoded_mbs};
-  }
-  += callback;
+  auto cb = utils::move_on_copy(std::move(callback));
+   
+  d.fd.async_write_some(utils::make_ioctl_write_buffer<MSVD_DECODE_MPEG_FRAME>(std::ref(unwrap(mc)->params)),
+    [=,&d](std::error_code const& ec, std::size_t bytes) mutable {
+      if(ec)
+        cb(ec, msvd::decode_result{0});
+      else
+        d.fd.async_read_some(asio::mutable_buffers_1(&unwrap(mc)->result, sizeof(unwrap(mc)->result)),
+          [cb, mc](std::error_code const& ec, std::size_t bytes) mutable {
+            cb(ec, decode_result{unwrap(mc)->result.num_of_decoded_mbs});
+          });
+    });
 }
 
 } // detail
@@ -367,12 +361,21 @@ auto async_decode_slice(decoder& d, Pr pr, Rs rs, F callback) -> std::enable_if_
 {
   msvd_h264_decode_params const* params = &*pr;
   msvd_decode_result* result = &*rs;
-
-  utils::async_write_some(d.fd, utils::make_ioctl_write_buffer<MSVD_DECODE_H264_SLICE>(std::ref(*params)))
-  >> [&d, result, mpr = utils::move_on_copy(std::move(pr))](std::size_t) {
-    return utils::async_read_some(d.fd, asio::mutable_buffers_1(result, sizeof(*result)));
-  }
-  += [callback = utils::move_on_copy(std::move(callback)), r = utils::move_on_copy(rs)](std::error_code const ec, std::size_t) mutable { callback(ec); };
+  auto mpr = utils::move_on_copy(std::move(pr));
+  auto cb = utils::move_on_copy(callback);
+  auto r = utils::move_on_copy(rs);
+  
+  d.fd.async_write_some(
+    utils::make_ioctl_write_buffer<MSVD_DECODE_H264_SLICE>(std::ref(*params)),
+    [=, &d](std::error_code const& ec, std::size_t) mutable {
+      if(ec)
+        cb(ec);
+       else
+        d.fd.async_read_some(asio::mutable_buffers_1(static_cast<msvd_decode_result*>(&*rs), sizeof(msvd_decode_result)),
+          [r, cb](std::error_code const ec, std::size_t) mutable {
+            cb(ec);
+          });
+    });
 }
 
 template<typename S, typename F>
