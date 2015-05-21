@@ -162,7 +162,7 @@ struct sink {
     
     friend void intrusive_ptr_add_ref(buf* b) { ++b->refs; } 
     friend void intrusive_ptr_release(buf* b) {
-      if(--(b->refs) == 0) 
+      if(--(b->refs) == 0)
         b->base->queue.push(b);
     }
   } buffers[24];
@@ -192,12 +192,16 @@ struct sink {
 
     s.fd.async_read_some(utils::make_ioctl_read_buffer<VIDIOC_DQBUF>(dqp), [&s, buffer = utils::move_on_copy(std::move(dqbuf))](std::error_code const& ec, std::size_t) {
       if(!ec) 
-        intrusive_ptr_release(s.buffers + +unwrap(buffer)->index);
+        intrusive_ptr_release(s.buffers + unwrap(buffer)->index);
     });
   }
 
   friend void push(sink& s, utils::shared_future<buffer> b) {
-    b.then([&](auto f) { push(s, b.get()); });
+    if(b.ready())
+      push(s, b.get());
+    else
+      std::cout << "delayed" << std::endl;
+    //  b.then([&](auto b) { push(s, b.get()); });
   }
 
   friend void push(sink& s, timestamp const& ts, utils::shared_future<buffer> b) {
@@ -251,8 +255,10 @@ struct sink {
     rect dest = {0, 0, width(s.vm), height(s.vm)};
     double picture_aspect_ratio = r.width * a.n / r.height;
     auto w = dest.h * picture_aspect_ratio;
-    if(w > dest.w) dest.h /= picture_aspect_ratio;
-    
+    if(w > dest.w) dest.h = dest.w / picture_aspect_ratio;
+    if(dest.w < width(s.vm)) dest.x = (width(s.vm) - dest.w) / 2;
+    if(dest.h < height(s.vm)) dest.y = (height(s.vm) - dest.h) / 2;
+   
     set_params(s, s.vm, rect{0,0,r.width,r.height}, dest);
   }
 };
