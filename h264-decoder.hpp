@@ -92,9 +92,13 @@ struct decoder {
       for(auto r = next_nal_unit(std::move(au)); !empty(r.first); r = next_nal_unit(std::move(r.second))) {
         auto pos = d.cx(r.first);
         if(d.cx.is_new_slice()) {
+          auto m = std::make_pair(get_resolution(d.cx.sps()), get_aspect_ratio(d.cx.sps()));
+          if(!d.dimensions || m != *d.dimensions) set_dimensions(d.sink, m.first, m.second);
+          d.dimensions = m;
+          
           if(d.cx.is_new_picture() && pic_type(*d.cx.current_picture()) != picture_type::bot)
             frame_buffer(*d.cx.current_picture()->frame, pull(d.frame_source));
-
+      
           slices.push_back(async_decode_slice(*d.hw, d.cx, utils::tag<coded_slice_tag>(std::move(r.first)), pos));
         }
       }
@@ -103,10 +107,6 @@ struct decoder {
       utils::shared_future<void> r;
     
       if(d.cx.current_picture() && pic_type(*d.cx.current_picture()) != picture_type::top) {
-        auto m = std::make_pair(get_resolution(d.cx.sps()), get_aspect_ratio(d.cx.sps()));
-        if(!d.dimensions || m != *d.dimensions) set_dimensions(d.sink, m.first, m.second);
-        d.dimensions = m;
-
 //        r = f.then([frame = frame_buffer(*d.cx.current_picture()), ts, sink = d.sink](auto) mutable { push(sink, ts, frame); });
         r = f.then([](auto f) {}).share();
         push(d.sink, ts, r.then([frame = frame_buffer(*d.cx.current_picture())](auto) { return frame.get(); }).share());
