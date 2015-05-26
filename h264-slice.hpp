@@ -406,6 +406,7 @@ O generate_reflist_for_p_slice(unsigned max_frame_num, C const& curr_pic,
 
   auto i = initialise_reflist(pic_type(curr_pic), [&](picture_reference<I> const& p) { return -FrameNumWrap(max_frame_num, curr_pic, p); },
                               begin(frames), end(frames), begin(ref), end(ref));
+  if(i != ref.begin()) std::fill(i, ref.end(), *(i-1));
 
   auto r = ref_pic_list_modification(max_frame_num, curr_pic, begin(frames), end(frames), begin(modifications), end(modifications), begin(ref), end(ref));
   
@@ -436,6 +437,9 @@ std::pair<O,O> generate_reflists_for_b_slice(unsigned max_frame_num, C const& cu
 
   if(num_ref_idx_l1_active > 1 && num_ref_idx_l0_active == num_ref_idx_l1_active && std::equal(begin(ref0), begin(ref0) + num_ref_idx_l0_active, begin(ref1)))
     std::swap(ref1[0], ref1[1]);
+
+  if(i0 != ref0.begin()) std::fill(i0, ref0.end(), *(i0-1));
+  if(i1 != ref1.begin()) std::fill(i1, ref1.end(), *(i1-1));
 
   auto r0 = ref_pic_list_modification(max_frame_num, curr_pic, begin(frames), end(frames), begin(modifications0), end(modifications0), begin(ref0), end(ref0));
   auto r1 = ref_pic_list_modification(max_frame_num, curr_pic, begin(frames), end(frames), begin(modifications1), end(modifications1), begin(ref1), end(ref1));
