@@ -74,7 +74,7 @@ constexpr unsigned height(video_mode vm) {
          ((video_mode::sd_576i25 == vm || video_mode::hd_576i25 == vm || video_mode::hd_576p50 == vm) ? 576 :
          ((video_mode::hd_480i30 == vm || video_mode::hd_480p60 == vm) ? 480 :
          ((video_mode::hd_720p60 == vm || video_mode::hd_720p50 == vm) ? 720 :
-         ((video_mode::hd_1080i25 == vm || video_mode::hd_1080i25 == vm || video_mode::hd_1080p30 == vm || video_mode::hd_1080p25 == vm) ? 1080 :
+         ((video_mode::hd_1080i30 == vm || video_mode::hd_1080i25 == vm || video_mode::hd_1080p30 == vm || video_mode::hd_1080p25 == vm) ? 1080 :
           -1))));  
 }
 
