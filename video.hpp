@@ -130,70 +130,93 @@ constexpr std::initializer_list<const char*> names(video_mode vm) {
 }
 
 struct sink {
-  sink(asio::io_service& io) : fd(io) {
-    fd.assign(::open("/dev/video0", O_RDWR));
-    if(!fd.is_open()) throw std::system_error(errno, std::system_category());
-
-    v4l2_requestbuffers request_buffers = {24, V4L2_BUF_TYPE_VIDEO_OUTPUT, V4L2_MEMORY_MMAP};
-    if(ioctl(fd.native_handle(), VIDIOC_REQBUFS, &request_buffers) < 0) throw std::system_error(errno, std::system_category());  
-
-    v4l2_capability cap;
-    if(ioctl(fd.native_handle(), VIDIOC_QUERYCAP, &cap) < 0) throw std::system_error(errno, std::system_category());
-    base_addr = MVDU_VIDEO_BASE_PHYS(&cap);
-
-    for(auto& a: buffers) {
-      a.base = this;
-      queue.push(&a);
-    }
-
-    int m = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-    if(ioctl(fd.native_handle(), VIDIOC_STREAMON, &m) < 0) throw std::system_error(errno, std::system_category());
-  }
-
+  sink(asio::io_service& io) : p(new impl(io)) {}
   sink(sink const&) = delete;
   sink& operator=(sink const&) = delete;
 
-  asio::posix::stream_descriptor fd;
-  std::size_t base_addr;
+  struct impl {
+    impl(asio::io_service& io) : fd(io) {
+      fd.assign(::open("/dev/video0", O_RDWR));
+      if(!fd.is_open()) throw std::system_error(errno, std::system_category());
 
-  struct buf {
-    std::atomic<std::size_t> refs = {0};
-    sink* base;
-    
-    friend void intrusive_ptr_add_ref(buf* b) { ++b->refs; } 
-    friend void intrusive_ptr_release(buf* b) {
-      if(--(b->refs) == 0)
-        b->base->queue.push(b);
+      v4l2_requestbuffers request_buffers = {24, V4L2_BUF_TYPE_VIDEO_OUTPUT, V4L2_MEMORY_MMAP};
+      if(ioctl(fd.native_handle(), VIDIOC_REQBUFS, &request_buffers) < 0) throw std::system_error(errno, std::system_category());  
+
+      v4l2_capability cap;
+      if(ioctl(fd.native_handle(), VIDIOC_QUERYCAP, &cap) < 0) throw std::system_error(errno, std::system_category());
+      base_addr = MVDU_VIDEO_BASE_PHYS(&cap);
+
+      for(auto& a: buffers) {
+        a.base = this;
+        queue.push(&a);
+      }
+
+      int m = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+      if(ioctl(fd.native_handle(), VIDIOC_STREAMON, &m) < 0) throw std::system_error(errno, std::system_category());
     }
-  } buffers[24];
-  
-  using buffer = utils::intrusive_ptr<buf>;
-  
-  utils::future_queue<buf*> queue;
+    
+    std::atomic<std::size_t> refs = {0};
+    asio::posix::stream_descriptor fd;
+    std::size_t base_addr;
+    std::atomic<bool> streaming = {false};
 
+    struct buf {
+      std::atomic<std::size_t> refs = {0};
+      impl* base;
+    
+      friend void intrusive_ptr_add_ref(buf* b) { 
+        intrusive_ptr_add_ref(b->base);
+        ++b->refs;
+      }
+       
+      friend void intrusive_ptr_release(buf* b) {
+        if(--(b->refs) == 0)
+          b->base->queue.push(b);
+        intrusive_ptr_release(b->base);
+      }
+    } buffers[24];
+    
+    utils::intrusive_ptr<impl> p;
+    
+    friend void intrusive_ptr_add_ref(impl* i) { ++i->refs; }
+    friend void intrusive_ptr_release(impl* i) {
+      if(--(i->refs) == 0) delete i;
+    }
+    
+    utils::future_queue<buf*> queue;
+    
+  	video_mode vm = video_mode::hd;
+  };
+  
+  using buffer = utils::intrusive_ptr<impl::buf>;
+  
+  utils::intrusive_ptr<impl> p;
+  
   friend utils::shared_future<buffer> pull(sink& s) {
-    return s.queue.pop().then([](auto f) { return buffer{f.get()}; }).share();
+    return s.p->queue.pop().then([](auto f) { return buffer{f.get()}; }).share();
   }
 
   friend void push(sink& s, buffer p) {
     v4l2_buffer b = {0};
     b.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     b.memory = V4L2_MEMORY_MMAP;
-    b.index = p.get() - s.buffers;
+    b.index = p.get() - s.p->buffers;
 
-    if(ioctl(s.fd.native_handle(), VIDIOC_QBUF, &b)) throw std::system_error(errno, std::system_category());
+    if(ioctl(s.p->fd.native_handle(), VIDIOC_QBUF, &b)) throw std::system_error(errno, std::system_category());
     intrusive_ptr_add_ref(p.get());
 
-    auto dqbuf = std::make_unique<v4l2_buffer>();
-    memset(dqbuf.get(), 0, sizeof(*dqbuf.get()));
-    dqbuf->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-    dqbuf->memory = V4L2_MEMORY_MMAP;
-    auto dqp = dqbuf.get();
+    if(atomic_exchange(&s.p->streaming, true)) {
+      auto dqbuf = std::make_unique<v4l2_buffer>();
+      memset(dqbuf.get(), 0, sizeof(*dqbuf.get()));
+      dqbuf->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+      dqbuf->memory = V4L2_MEMORY_MMAP;
+      auto dqp = dqbuf.get();
 
-    s.fd.async_read_some(utils::make_ioctl_read_buffer<VIDIOC_DQBUF>(dqp), [&s, buffer = utils::move_on_copy(std::move(dqbuf))](std::error_code const& ec, std::size_t) {
-      if(!ec) 
-        intrusive_ptr_release(s.buffers + unwrap(buffer)->index);
-    });
+      s.p->fd.async_read_some(utils::make_ioctl_read_buffer<VIDIOC_DQBUF>(dqp), [&s, buffer = utils::move_on_copy(std::move(dqbuf))](std::error_code const& ec, std::size_t) {
+        if(!ec) 
+          intrusive_ptr_release(s.p->buffers + unwrap(buffer)->index);
+      });
+    }
   }
 
   friend void push(sink& s, utils::shared_future<buffer> b) {
@@ -241,25 +264,23 @@ struct sink {
     MVDU_MACROBLOCKS_PER_LINE_C(&params) = buffer_width / 16;
     MVDU_OFFSET_C(&params) = buffer_chroma_offset;
 
-	  if(ioctl(s.fd.native_handle(), VIDIOC_S_PARAMS, &params) < 0) throw std::system_error(errno, std::system_category()); 
+	  if(ioctl(s.p->fd.native_handle(), VIDIOC_S_PARAMS, &params) < 0) throw std::system_error(errno, std::system_category()); 
   }
-
-  video_mode vm = video_mode::hd;
 
   friend void set_mode(sink& s, video_mode vm) {
     set_params(s, vm, rect{0, 0, width(vm), height(vm)}, rect{0, 0, width(vm), height(vm)}); 
-    s.vm = vm;
+    s.p->vm = vm;
   }
   
   friend void set_dimensions(sink& s, resolution r, aspect_ratio a) {
-    rect dest = {0, 0, width(s.vm), height(s.vm)};
+    rect dest = {0, 0, width(s.p->vm), height(s.p->vm)};
     double picture_aspect_ratio = r.width * a.n / r.height;
     auto w = dest.h * picture_aspect_ratio;
     if(w > dest.w) dest.h = dest.w / picture_aspect_ratio;
-    if(dest.w < width(s.vm)) dest.x = (width(s.vm) - dest.w) / 2;
-    if(dest.h < height(s.vm)) dest.y = (height(s.vm) - dest.h) / 2;
+    if(dest.w < width(s.p->vm)) dest.x = (width(s.p->vm) - dest.w) / 2;
+    if(dest.h < height(s.p->vm)) dest.y = (height(s.p->vm) - dest.h) / 2;
    
-    set_params(s, s.vm, rect{0,0,r.width,r.height}, dest);
+    set_params(s, s.p->vm, rect{0,0,r.width,r.height}, dest);
   }
 };
 
