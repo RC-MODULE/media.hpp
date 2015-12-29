@@ -1,4 +1,4 @@
-#include "../media.hpp"
+#include <media.hpp>
 
 using namespace std::literals::chrono_literals;
 

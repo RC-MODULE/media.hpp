@@ -10,6 +10,6 @@ clean:
 	rm -f *.o
 
 %: %.cpp
-	$(CXX) --std=c++14 -DASIO_STANDALONE -DASIO_DISABLE_THREADS $^ -o $@
+	$(CXX) --std=c++14 -I../include -DASIO_STANDALONE -DASIO_DISABLE_THREADS $^ -o $@
 
 .PHONY: all clean
