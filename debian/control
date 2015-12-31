@@ -1,0 +1,20 @@
+Source: libmediahpp
+Priority: optional
+Maintainer: Andrew 'Necromant' Andrianov <andrew@ncrmnt.org>
+Build-Depends: debhelper (>= 9), cmake
+Standards-Version: 3.9.5
+Section: libs
+Homepage: https://github.com/RC-MODULE/media.hpp
+#Vcs-Git: git://anonscm.debian.org/collab-maint/libmediahpp.git
+#Vcs-Browser: http://anonscm.debian.org/?p=collab-maint/libmediahpp.git;a=summary
+
+Package: libmediahpp-dev
+Section: libdevel
+Architecture: any
+Depends: ${misc:Depends}
+Description: RC Module media.hpp hw h264/mpeg-2/vc-1 decoding library
+
+Package: libmediahpp-examples
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: RC Module media.hpp h264 decoding example
