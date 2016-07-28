@@ -2,7 +2,7 @@
 #define __video_hpp__f11fa058_cb5c_4876_921e_51aa0c06aad7__
 
 #include <atomic>
-
+#include <math.h>
 #include <asio.hpp>
 #include "utils.hpp"
 
@@ -23,7 +23,7 @@ struct rect {
 struct resolution {
   std::uint32_t width;
   std::uint32_t height;
-  
+
   friend bool operator == (resolution const& a, resolution const& b) { return a.width == b.width && a.height == b. height; }
 };
 
@@ -33,7 +33,7 @@ struct aspect_ratio {
   friend bool operator == (aspect_ratio const& a, aspect_ratio const& b) { return a.n == b.n; }
 };
 
-enum class video_mode { 
+enum class video_mode {
   sd_486i30 = MVDU_MODE_SD_486_I_30,
   sd_576i25 = MVDU_MODE_SD_576_I_25,
   hd_480i30 = MVDU_MODE_HD_480_I_30,
@@ -51,19 +51,19 @@ enum class video_mode {
 };
 
 inline
-constexpr bool is_progressive(video_mode vm) { 
-  return vm == video_mode::hd_480p60 || vm == video_mode::hd_576p50 || vm == video_mode::hd_720p60 
+constexpr bool is_progressive(video_mode vm) {
+  return vm == video_mode::hd_480p60 || vm == video_mode::hd_576p50 || vm == video_mode::hd_720p60
         || vm == video_mode::hd_720p50 || vm == video_mode::hd_1080p30 || vm == video_mode::hd_1080p25;
 }
 
-inline 
+inline
 constexpr bool is_hd(video_mode vm) {
   return !(vm == video_mode::sd_486i30 || vm == video_mode::sd_576i25);
 }
 
-inline 
+inline
 constexpr unsigned width(video_mode vm) {
-  return (video_mode::sd_486i30 == vm || video_mode::sd_576i25 == vm || video_mode::hd_576i25 == vm || 
+  return (video_mode::sd_486i30 == vm || video_mode::sd_576i25 == vm || video_mode::hd_576i25 == vm ||
           video_mode::hd_576p50 == vm || video_mode::hd_480i30 == vm || video_mode::hd_480p60 == vm) ? 720 :
           ((video_mode::hd_720p60 == vm || video_mode::hd_720p50 == vm) ? 1280 : 1920);
 }
@@ -75,15 +75,15 @@ constexpr unsigned height(video_mode vm) {
          ((video_mode::hd_480i30 == vm || video_mode::hd_480p60 == vm) ? 480 :
          ((video_mode::hd_720p60 == vm || video_mode::hd_720p50 == vm) ? 720 :
          ((video_mode::hd_1080i30 == vm || video_mode::hd_1080i25 == vm || video_mode::hd_1080p30 == vm || video_mode::hd_1080p25 == vm) ? 1080 :
-          -1))));  
+          -1))));
 }
 
-inline 
+inline
 constexpr int framerate(video_mode vm) {
   return (video_mode::sd_486i30 == vm || video_mode::hd_480i30 == vm || video_mode::hd_1080i30 == vm || video_mode::hd_1080p30 == vm) ? 30 :
          ((video_mode::sd_576i25 == vm || video_mode::hd_576i25 == vm || video_mode::hd_1080i25 == vm || video_mode::hd_1080p25 == vm) ? 25 :
          ((video_mode::hd_576p50 == vm || video_mode::hd_720p50 == vm) ? 50 :
-         ((video_mode::hd_480p60 == vm || video_mode::hd_720p60 == vm) ? 60 : 
+         ((video_mode::hd_480p60 == vm || video_mode::hd_720p60 == vm) ? 60 :
           -1)));
 }
 
@@ -94,14 +94,14 @@ constexpr video_mode construct_video_mode(int height, int framerate, bool progre
           (height == 720 ? (framerate == 50 ? video_mode::hd_720p50 : video_mode::hd_720p60) :
           (height == 576 ? (framerate == 25 ? (hd ? video_mode::hd_576i25 : video_mode::sd_576i25) : video_mode::hd_576p50) :
           (height == 480 ? (framerate == 30 ? video_mode::hd_480i30 : video_mode::hd_480p60) :
-          (height == 486 ? video_mode::sd_486i30 : 
+          (height == 486 ? video_mode::sd_486i30 :
           video_mode::sd_576i25))));
 }
 
 inline
 constexpr bool is_valid_video_mode(unsigned _height, int _rate, bool progressive, bool hd) {
-  return 
-    height(construct_video_mode(_height, _rate, progressive, hd)) == _height 
+  return
+    height(construct_video_mode(_height, _rate, progressive, hd)) == _height
     && framerate(construct_video_mode(_height, _rate, progressive, hd)) == _rate
     && is_progressive(construct_video_mode(_height, _rate, progressive, hd))
     && is_hd(construct_video_mode(_height, _rate, progressive, hd));
@@ -140,7 +140,7 @@ struct sink {
       if(!fd.is_open()) throw std::system_error(errno, std::system_category());
 
       v4l2_requestbuffers request_buffers = {24, V4L2_BUF_TYPE_VIDEO_OUTPUT, V4L2_MEMORY_MMAP};
-      if(ioctl(fd.native_handle(), VIDIOC_REQBUFS, &request_buffers) < 0) throw std::system_error(errno, std::system_category());  
+      if(ioctl(fd.native_handle(), VIDIOC_REQBUFS, &request_buffers) < 0) throw std::system_error(errno, std::system_category());
 
       v4l2_capability cap;
       if(ioctl(fd.native_handle(), VIDIOC_QUERYCAP, &cap) < 0) throw std::system_error(errno, std::system_category());
@@ -154,7 +154,7 @@ struct sink {
       int m = V4L2_BUF_TYPE_VIDEO_OUTPUT;
       if(ioctl(fd.native_handle(), VIDIOC_STREAMON, &m) < 0) throw std::system_error(errno, std::system_category());
     }
-    
+
     std::atomic<std::size_t> refs = {0};
     asio::posix::stream_descriptor fd;
     std::size_t base_addr;
@@ -163,35 +163,35 @@ struct sink {
     struct buf {
       std::atomic<std::size_t> refs = {0};
       impl* base;
-    
-      friend void intrusive_ptr_add_ref(buf* b) { 
+
+      friend void intrusive_ptr_add_ref(buf* b) {
         intrusive_ptr_add_ref(b->base);
         ++b->refs;
       }
-       
+
       friend void intrusive_ptr_release(buf* b) {
         if(--(b->refs) == 0)
           b->base->queue.push(b);
         intrusive_ptr_release(b->base);
       }
     } buffers[24];
-    
+
     utils::intrusive_ptr<impl> p;
-    
+
     friend void intrusive_ptr_add_ref(impl* i) { ++i->refs; }
     friend void intrusive_ptr_release(impl* i) {
       if(--(i->refs) == 0) delete i;
     }
-    
+
     utils::future_queue<buf*> queue;
-    
+
   	video_mode vm = video_mode::hd;
   };
-  
+
   using buffer = utils::intrusive_ptr<impl::buf>;
-  
+
   utils::intrusive_ptr<impl> p;
-  
+
   friend utils::shared_future<buffer> pull(sink& s) {
     return s.p->queue.pop().then([](auto f) { return buffer{f.get()}; }).share();
   }
@@ -213,7 +213,7 @@ struct sink {
       auto dqp = dqbuf.get();
 
       s.p->fd.async_read_some(utils::make_ioctl_read_buffer<VIDIOC_DQBUF>(dqp), [&s, buffer = utils::move_on_copy(std::move(dqbuf))](std::error_code const& ec, std::size_t) {
-        if(!ec) 
+        if(!ec)
           intrusive_ptr_release(s.p->buffers + unwrap(buffer)->index);
       });
     }
@@ -222,16 +222,17 @@ struct sink {
   friend void push(sink& s, utils::shared_future<buffer> b) {
     if(b.ready())
       push(s, b.get());
-    else
-      std::cout << "delayed" << std::endl;
-    //  b.then([&](auto b) { push(s, b.get()); });
+    else {
+        std::cout << "WARN: frame delayed" << std::endl;
+        b.then([&](auto b) { push(s, b.get()); });
+    }
   }
 
   friend void push(sink& s, timestamp const& ts, utils::shared_future<buffer> b) {
     push(s, std::move(b));
   }
 
-  static constexpr std::uint32_t buffer_size = MVDU_VIDEO_MAX_BUFFER_SIZE; 
+  static constexpr std::uint32_t buffer_size = MVDU_VIDEO_MAX_BUFFER_SIZE;
   static constexpr std::uint32_t buffer_width = 1920;
   static constexpr std::uint32_t buffer_height = 1088;
   static constexpr std::uint32_t buffer_chroma_offset = 256*120*1088/32*2;
@@ -255,23 +256,40 @@ struct sink {
 	  params.src.h = src.h;
     params.src.h = std::min(1080, params.src.h);
 
-	  params.dst.x = dst.x;
-	  params.dst.y = dst.y;
-	  params.dst.w = dst.w;
-	  params.dst.h = dst.h;
+    /* TODO: Properly calculate parameters required for scaling */
+
+    float ratio_video = ((float) src.w) / ((float) src.h);
+    float ratio_disp = 1920.0 / 1080.0;
+    ratio_video = round(ratio_video * 10.0);
+    ratio_disp = round(ratio_disp * 10.0);
+
+    std::cout << "Aspect ratio (video/disp): " << ratio_video << "/" << ratio_disp << std::endl;
+
+    if (ratio_video != ratio_disp) {
+      /* Disable scaling if video aspect doesn't match display */
+      params.dst.x = (1920 - src.w)/2;
+      params.dst.y = (1080 - src.h)/2;
+      params.dst.w = src.w;
+      params.dst.h = src.h;
+    } else {
+      params.dst.x = dst.x;
+  	  params.dst.y = dst.y;
+  	  params.dst.w = dst.w;
+  	  params.dst.h = dst.h;
+    }
 
     MVDU_MACROBLOCKS_PER_LINE_Y(&params) = buffer_width / 16;
     MVDU_MACROBLOCKS_PER_LINE_C(&params) = buffer_width / 16;
     MVDU_OFFSET_C(&params) = buffer_chroma_offset;
 
-	  if(ioctl(s.p->fd.native_handle(), VIDIOC_S_PARAMS, &params) < 0) throw std::system_error(errno, std::system_category()); 
+	  if(ioctl(s.p->fd.native_handle(), VIDIOC_S_PARAMS, &params) < 0) throw std::system_error(errno, std::system_category());
   }
 
   friend void set_mode(sink& s, video_mode vm) {
-    set_params(s, vm, rect{0, 0, width(vm), height(vm)}, rect{0, 0, width(vm), height(vm)}); 
+    set_params(s, vm, rect{0, 0, width(vm), height(vm)}, rect{0, 0, width(vm), height(vm)});
     s.p->vm = vm;
   }
-  
+
   friend void set_dimensions(sink& s, resolution r, aspect_ratio a) {
     rect dest = {0, 0, width(s.p->vm), height(s.p->vm)};
     double picture_aspect_ratio = r.width * a.n / r.height;
@@ -279,7 +297,7 @@ struct sink {
     if(w > dest.w) dest.h = dest.w / picture_aspect_ratio;
     if(dest.w < width(s.p->vm)) dest.x = (width(s.p->vm) - dest.w) / 2;
     if(dest.h < height(s.p->vm)) dest.y = (height(s.p->vm) - dest.h) / 2;
-   
+
     set_params(s, s.p->vm, rect{0,0,r.width,r.height}, dest);
   }
 };
