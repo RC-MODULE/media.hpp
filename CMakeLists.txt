@@ -1,5 +1,8 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8.8)
 
+SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH};${CMAKE_SOURCE_DIR}/cmake)
+include(LinuxCrossCompile)
+
 PROJECT(mediahpp)
 SET(PROJECT_VERSION   0.2.0)
 
@@ -8,7 +11,7 @@ find_program( MEMORYCHECK_COMMAND valgrind )
 set( MEMORYCHECK_COMMAND_OPTIONS "--trace-children=yes --leak-check=full" )
 
 
-SET(CMAKE_CXX_FLAGS "--std=c++14 -DASIO_STANDALONE -DASIO_DISABLE_THREADS")
+SET(CMAKE_CXX_FLAGS " -static --std=c++14 -DASIO_STANDALONE -DASIO_DISABLE_THREADS")
 
 INCLUDE_DIRECTORIES(
     ./include/
@@ -24,7 +27,7 @@ file(GLOB EXAMPLES
 )
 
 foreach(file ${EXAMPLES})
-  GET_FILENAME_COMPONENT(f ${file} NAME_WE)  
+  GET_FILENAME_COMPONENT(f ${file} NAME_WE)
   ADD_EXECUTABLE(${f} ${file})
 endforeach(file)
 
